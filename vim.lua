@@ -426,6 +426,7 @@ local function pullCommand(input, numeric, len)
         input = ''
     end
     local x,y = 1, hig
+    local oldModeMsg = modeMsg
 
     local backspace = false
     local finish = false
@@ -449,7 +450,11 @@ local function pullCommand(input, numeric, len)
             write(" ")
         end
   
+        modeMsg = input
         local key = pullTypeaheadWRMP()
+        -- terminal cursor position is undefined after typeahead access
+        y = hig
+        setpos(x + #input, y)
   
         if isCharacterKey(key) then
             local p1 = getSelfInsert(key)
@@ -478,6 +483,7 @@ local function pullCommand(input, numeric, len)
             end
         end
     until (key == "cr") or (finish == true)
+    modeMsg = oldModeMsg
     return input
 end
 
@@ -1584,18 +1590,21 @@ local function dirOpener(dir, inputname)
 end
 
 local lastSearch
+local searchPrefix = "/"
 --search the current file for a string
 local function search(direction, research, currword, wrapSearchPos)
     local localcase = ignorecase
+    local oldModeMsg = modeMsg
     clearScreenLine(hig)
     setcolors(colors.black, colors.white)
     setpos(1, hig)
     if not wrapSearchPos then
         if direction == "forward" then
-            write("/")
+            searchPrefix = "/"
         else
-            write("?")
+            searchPrefix = "?"
         end
+        write(searchPrefix)
     end
     local currSearch = ""
     local searching = true
@@ -1611,6 +1620,7 @@ local function search(direction, research, currword, wrapSearchPos)
         local currHistoryItem = #sessionSearches + 1
         table.insert(sessionSearches, #sessionSearches + 1, "")
         while searching do
+            modeMsg = searchPrefix .. currSearch
             local key = pullTypeahead()
             if isCharacterKey(key) then
                 local k = getSelfInsert(key)
@@ -1775,6 +1785,7 @@ local function search(direction, research, currword, wrapSearchPos)
             err("Pattern not found: "..currSearch)
         end
     end
+    modeMsg = oldModeMsg
 end
 
 
