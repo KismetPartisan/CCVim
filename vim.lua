@@ -440,6 +440,7 @@ local function pullCommand(input, numeric, len)
             setpos(x - 1, y)
             if #input < 1 then
                 finish = true
+                insertTypeahead("bs", {index = 1})  -- Insert fake event to consume
             end
         end
         if #input > 0 then
@@ -470,13 +471,13 @@ local function pullCommand(input, numeric, len)
                     input = input .. p1
                 end
             end
-        else
+        elseif not finish then
             if key == "bs" then
                 input = input:sub(1, #input - 1)
                 backspace = true
             end
         end
-    until (key == "cr") or (finish == true and not isCharacterKey(key))
+    until (key == "cr") or (finish == true)
     return input
 end
 
