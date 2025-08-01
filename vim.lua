@@ -2586,6 +2586,15 @@ while running == true do
                 filelines[currCursorY + currFileOffset] = string.sub(filelines[currCursorY + currFileOffset], 1, currCursorX + currXOffset - 1)
                 fileContents[currfile]["unsavedchanges"] = true
             end
+            while currCursorY + currFileOffset > #filelines do
+                currCursorY = currCursorY - 1
+                if currCursorY < 1 then
+                    while currCursorY < 1 do
+                        currFileOffset = currFileOffset - 1
+                        currCursorY = currCursorY + 1
+                    end
+                end
+            end
             while currCursorX + currXOffset > #filelines[currCursorY + currFileOffset] do
                 currCursorX = currCursorX - 1
                 if currCursorX < 1 then
