@@ -110,9 +110,140 @@ local ignorecase = false
 local lastSearchPos
 local lastSearchLine
 local sessionSearches = {}
+local modeMsg
+local typeahead = {}  -- String keys and pseudokeys
+local typeaheadUpdates = {}  -- Mouse position updates
+local activeModifiers = {}
+local prefixedModifiers = {}
+local keyNames = {
+    [keys.backspace] = "bs",
+    [keys.enter] = "cr",
+    [keys.tab] = "tab",  -- Consider setting to "esc"?
+    [keys.numPadEnter] = "cr",
+    [keys.delete] = "del",
+    [keys.minus] = "-",
+    [keys.equals] = "=",
+    [keys.leftBracket] = "[",
+    [keys.rightBracket] = "]",
+    [keys.semiColon] = ";",
+    [keys.apostrophe] = "'",
+    [keys.grave] = "`",
+    [keys.backslash] = "backslash",
+    [keys.comma] = ",",
+    [keys.period] = ".",
+    [keys.slash] = "/",
+    [keys.multiply] = "kmultiply",
+    [keys.space] = " ",
+    [keys.one] = "1",
+    [keys.two] = "2",
+    [keys.three] = "3",
+    [keys.four] = "4",
+    [keys.five] = "5",
+    [keys.six] = "6",
+    [keys.seven] = "7",
+    [keys.eight] = "8",
+    [keys.nine] = "9",
+    [keys.zero] = "0",
+    [keys.numPadAdd] = "kplus",
+    [keys.numPadSubtract] = "kminus",
+    [keys.numPadDecimal] = "kpoint",
+    [keys.numPadEquals] = "kequal",
+    [keys.numPadComma] = "kcomma",
+    [keys.numPadDivide] = "kdivide",
+    [keys.numPad0] = "k0",
+    [keys.numPad1] = "k1",
+    [keys.numPad2] = "k2",
+    [keys.numPad3] = "k3",
+    [keys.numPad4] = "k4",
+    [keys.numPad5] = "k5",
+    [keys.numPad6] = "k6",
+    [keys.numPad7] = "k7",
+    [keys.numPad8] = "k8",
+    [keys.numPad9] = "k9",
+    [keys.yen] = "\xa5",
+    [keys.circumflex] = "^",
+    [keys.at] = "@",
+    [keys.colon] = ":",
+    [keys.underscore] = "_",
+}
+local builtinKeyCharacters = {
+    space = " ",
+    backslash = "\\",
+    kmultiply = "*",
+    kplus = "+",
+    kminus = "-",
+    kpoint = ".",
+    kequal = "=",
+    kcomma = ",",
+    kdivide = "/",
+    k0 = "0",
+    k1 = "1",
+    k2 = "2",
+    k3 = "3",
+    k4 = "4",
+    k5 = "5",
+    k6 = "6",
+    k7 = "7",
+    k8 = "8",
+    k9 = "9",
+}
+local modifierNames = {
+    [keys.leftCtrl] = "C",
+    [keys.rightCtrl] = "C",
+    [keys.leftAlt] = "A",
+    [keys.rightAlt] = "A",
+    [keys.leftShift] = "S",
+    [keys.rightShift] = "S",
+}
+local keyNormalisation = {
+    ["<"] = "lt",
+    -- [">"] = "gt",
+    [" "] = "space",
+    ["\\"] = "backslash",
+}
+local mouseClickNames = {
+    [1] = "leftmouse",
+    [2] = "rightmouse",
+    [3] = "middlemouse",
+}
 
 if not tab.find(args, "--term") then
     monitor = peripheral.find("monitor")
+end
+
+local function registerSimpleKeys(names)
+    local _, k
+    for _, k in ipairs(names) do
+        if keys[k] == nil then
+            error("No such key: " .. k)
+        end
+        keyNames[keys[k]] = k:lower()
+    end
+end
+registerSimpleKeys{"left", "right", "up", "down"}
+registerSimpleKeys{"f1", "f2", "f3", "f4", "f5", "f6", "f7", "f8", "f9", "f10", "f11", "f12", "f13", "f14", "f15"}
+registerSimpleKeys{"home", "end", "pageUp", "pageDown", "insert"}
+registerSimpleKeys{"a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", "n", "o", "p", "q", "r", "s", "t", "u", "v", "w", "x", "y", "z"}
+
+local function isCharacterKey(name)
+    if #name == 1 then
+        return true
+    end
+    if builtinKeyCharacters[name] ~= nil then
+        return true
+    end
+    return false
+end
+
+local function getSelfInsert(name)
+    if #name == 1 then
+        return name
+    end
+    local ch = builtinKeyCharacters[name]
+    if ch ~= nil then
+        return ch
+    end
+    return "<" .. name .. ">"
 end
 
 local function resetSize()
@@ -157,13 +288,137 @@ local function setpos(xpos, ypos)
     end
 end
 
---pull event with remaps
-local function pullEventWRMP()
-    local e, s, v2, v3 = os.pullEvent()
-    if e == "char" and remappings[s] then
-        s = remappings[s]
+local function getLatestModifiers(...)  -- Example result: {A = true, C = nil}
+    local result = {}
+    local resetPrefixed = ... or false
+    local k, v
+    for k, v in pairs(activeModifiers) do
+        if v then
+            result[modifierNames[k]] = true
+        end
     end
-    return e, s, v2, v3
+    for k, v in pairs(prefixedModifiers) do
+        if v then
+            result[modifierNames[k]] = true
+            if resetPrefixed then
+                activeModifiers[k] = nil
+                prefixedModifiers[k] = nil
+            end
+        end
+    end
+    return result
+end
+
+local function insertTypeahead(charname, ...)
+    local kwargs = ... or {}
+    local update = kwargs.update or {}
+    local index = kwargs.index or #typeahead + 1
+    charname = keyNormalisation[charname:lower()] or charname  -- TODO: operate on the last dash-separated component
+    table.insert(typeahead, index, charname)
+    table.insert(typeaheadUpdates, index, update)
+end
+
+local handleNonInputEvent  -- implemented after dependencies are declared
+
+local function waitForEvents()
+    local e, s, v2, v3 = os.pullEvent()
+    if e == "char" then
+        s = keyNormalisation[s:lower()] or s
+        local mods = getLatestModifiers(true)
+        if mods.S then
+            -- Do not add shift, because it should already be consumed by the key to char conversion
+        end
+        if mods.A then
+            -- Warning: AltGr might generate unwanted alt modification
+            s = "A-" .. s
+        end
+        if mods.C then
+            s = "C-" .. s
+        end
+        insertTypeahead(s)
+    elseif e == "key" then
+        local translatedKey = keyNames[s]
+        local translatedMod = modifierNames[s]
+        if translatedKey ~= nil then
+            translatedKey = keyNormalisation[translatedKey:lower()] or translatedKey
+            -- Only if the key event will not be doubled by a char event
+            if not isCharacterKey(translatedKey) or activeModifiers[keys.leftCtrl] or activeModifiers[keys.rightCtrl] then
+                local mods = getLatestModifiers(true)
+                if mods.S then
+                    translatedKey = "S-" .. translatedKey
+                end
+                if mods.A then
+                    translatedKey = "A-" .. translatedKey
+                end
+                if mods.C then
+                    translatedKey = "C-" .. translatedKey
+                end
+                insertTypeahead(translatedKey)
+            end
+        elseif translatedMod ~= nil then
+            activeModifiers[s] = true
+            if prefixedModifiers[s] then
+                prefixedModifiers[s] = nil  -- Repeated modifier presses remove the prefixed state
+            else
+                prefixedModifiers[s] = not v2  -- Only prefixed if not held
+                -- FIXME repeats for the modifier keys seem to not be sent
+            end
+        end
+    elseif e == "key_up" then
+        local translatedMod = modifierNames[s]
+        if translatedMod ~= nil then
+            activeModifiers[s] = nil  -- No longer active
+            -- But remain prefixed
+        end
+    elseif e == "mouse_click" then
+        local translatedKey = mouseClickNames[s]
+        local mods = getLatestModifiers(true)
+        if mobile or translatedKey == nil then
+            translatedKey = "tab"
+        else
+            translatedKey = keyNormalisation[translatedKey:lower()] or translatedKey
+            if mods.S then
+                translatedKey = "S-" .. translatedKey
+            end
+            if mods.A then
+                translatedKey = "A-" .. translatedKey
+            end
+            if mods.C then
+                translatedKey = "C-" .. translatedKey
+            end
+        end
+        insertTypeahead(translatedKey, {update = {mouseX = v2, mouseY = v3}})
+    elseif e == "mouse_scroll" then
+        local translatedKey = "scrollwheeldown"
+        if s < 0 then
+            translatedKey = "scrollwheelup"
+        end
+        insertTypeahead(translatedKey, {update = {mouseX = v2, mouseY = v3}})
+    elseif e == "paste" then
+        getLatestModifiers(true)  -- Drop prefix states
+        local ch
+        for ch in s:gmatch(".") do
+            insertTypeahead(ch)
+        end
+    else
+        handleNonInputEvent(e, s, v2, v3)
+    end
+end
+
+local function pullTypeahead()
+    local key = table.remove(typeahead, 1)
+    while key == nil and running do
+        waitForEvents()
+        key = table.remove(typeahead, 1)
+    end
+    return key
+end
+
+-- pull from typeahead with remaps
+local function pullTypeaheadWRMP()
+    local key = pullTypeahead()
+    key = remappings[key] or key
+    return key
 end
 
 local function pullCommand(input, numeric, len)
@@ -193,9 +448,10 @@ local function pullCommand(input, numeric, len)
             write(" ")
         end
   
-      local ev, p1 = pullEventWRMP()
+        local key = pullTypeaheadWRMP()
   
-        if ev == 'char' then
+        if isCharacterKey(key) then
+            local p1 = getSelfInsert(key)
             local send = true
             if #input < 1 then
                 setpos(1, 1)
@@ -214,13 +470,13 @@ local function pullCommand(input, numeric, len)
                     input = input .. p1
                 end
             end
-        elseif ev == 'key' then
-            if p1 == keys.backspace then
+        else
+            if key == "bs" then
                 input = input:sub(1, #input - 1)
                 backspace = true
             end
         end
-    until (ev == 'key' and p1 == keys.enter) or (finish == true and ev == "key")
+    until (key == "cr") or (finish == true and not isCharacterKey(key))
     return input
 end
 
@@ -244,6 +500,16 @@ local function sendMsg(message)
     setpos(1, hig)
     setcolors(colors.black, colors.white)
     write(message)
+end
+
+local function setModeMsg(msg)
+    if msg and #msg > 0 then
+        modeMsg = msg
+        sendMsg(msg)
+    else
+        modeMsg = nil
+        sendMsg(" ")
+    end
 end
 
 local function drawFile(forcedredraw)
@@ -748,23 +1014,33 @@ local function redrawTerm()
     end
 end
 
+-- declared above
+function handleNonInputEvent(e, s, v2, v3)
+    if e == "term_resize" then
+        resetSize()
+        redrawTerm()
+        if modeMsg ~= nil then
+            sendMsg(modeMsg)
+        end
+    end
+end
 
 local function insertMode()
     drawFile(true)
-    sendMsg("-- INSERT --")
-    local ev, key
-    while key ~= keys.tab do
-        ev, key = pullEventWRMP()
-        if ev == "key" then
-            if key == keys.left then
+    setModeMsg("-- INSERT --")
+    local key
+    while key ~= "tab" do
+        key = pullTypeaheadWRMP()
+        if not isCharacterKey(key) then
+            if key == "left" then
                 moveCursorLeft()
-            elseif key == keys.right then
+            elseif key == "right" then
                 moveCursorRight()
-            elseif key == keys.up then
+            elseif key == "up" then
                 moveCursorUp()
-            elseif key == keys.down then
+            elseif key == "down" then
                 moveCursorDown()
-            elseif key == keys.backspace then
+            elseif key == "bs" then
                 if filelines[currCursorY + currFileOffset] ~= "" and filelines[currCursorY + currFileOffset] ~= nil and currCursorX > 1 then
                     filelines[currCursorY + currFileOffset] = string.sub(filelines[currCursorY + currFileOffset], 1, currCursorX + currXOffset - 2) .. string.sub(filelines[currCursorY + currFileOffset], currCursorX + currXOffset, #(filelines[currCursorY + currFileOffset]))
                     moveCursorLeft()
@@ -805,7 +1081,7 @@ local function insertMode()
                         lastSearchLine = nil
                     end
                 end
-            elseif key == keys.enter then
+            elseif key == "cr" then
                 lastSearchPos = nil
                 lastSearchLine = nil
                 if filelines[currCursorY + currFileOffset] ~= nil then
@@ -846,15 +1122,16 @@ local function insertMode()
                 recalcMLCs(false, {-1, 1}) --slow, but it works for now
                 drawFile(true)
             end
-        elseif ev == "char" then
+        else
             lastSearchPos = nil
             lastSearchLine = nil
             if filelines[currCursorY + currFileOffset] == nil then
                 filelines[currCursorY + currFileOffset] = ""
             end
-            filelines[currCursorY + currFileOffset] = string.sub(filelines[currCursorY + currFileOffset], 1, currCursorX + currXOffset - 1) .. key ..string.sub(filelines[currCursorY + currFileOffset], currCursorX + currXOffset, #(filelines[currCursorY + currFileOffset]))
-            currCursorX = currCursorX + 1
-            if currCursorX + lineoffset > wid then
+            local ch = getSelfInsert(key)
+            filelines[currCursorY + currFileOffset] = string.sub(filelines[currCursorY + currFileOffset], 1, currCursorX + currXOffset - 1) .. ch ..string.sub(filelines[currCursorY + currFileOffset], currCursorX + currXOffset, #(filelines[currCursorY + currFileOffset]))
+            currCursorX = currCursorX + #ch
+            while currCursorX + lineoffset > wid do
                 currCursorX = currCursorX - 1
                 currXOffset = currXOffset + 1
             end
@@ -864,15 +1141,10 @@ local function insertMode()
                 fileContents[currfile] = {""}
             end
             fileContents[currfile]["unsavedchanges"] = true
-        elseif ev == "term_resize" then
-            resetSize()
-            redrawTerm()
-            sendMsg("-- INSERT --")
-        elseif ev == "mouse_click" and mobile then
-            key = keys.tab --get out of the loop
+        -- mouse_click was already translated to tab by the pullTypeahead
         end
     end
-    sendMsg(" ")
+    setModeMsg(nil)
 end
 
 --Parse .vimrc file here
@@ -924,6 +1196,14 @@ local function pullChar()
         tm = remappings[tm]
     end
     return _, tm
+end
+
+local function pullTypeaheadChar()
+    local ch
+    repeat
+        ch = getSelfInsert(pullTypeaheadWRMP())
+    until #ch == 1
+    return ch
 end
 
 local oldyoff
@@ -1330,18 +1610,19 @@ local function search(direction, research, currword, wrapSearchPos)
         local currHistoryItem = #sessionSearches + 1
         table.insert(sessionSearches, #sessionSearches + 1, "")
         while searching do
-            local e, k = os.pullEvent()
-            if e == "char" then
+            local key = pullTypeahead()
+            if isCharacterKey(key) then
+                local k = getSelfInsert(key)
                 currSearch = currSearch .. k
                 currHistoryItem = #sessionSearches
                 sessionSearches[#sessionSearches] = currSearch
                 --move cursor right one and write the next character
-                setpos(#currSearch + 1, hig)
+                setpos(#currSearch + #k, hig)
                 write(k)
-            elseif e == "key" then
-                if k == keys.enter then
+            else
+                if key == "cr" then
                     searching = false
-                elseif k == keys.backspace then
+                elseif key == "bs" then
                     --delete the last character
                     currSearch = string.sub(currSearch, 1, #currSearch - 1)
                     currHistoryItem = #sessionSearches
@@ -1349,7 +1630,7 @@ local function search(direction, research, currword, wrapSearchPos)
                     --move cursor left one and clear the last character
                     setpos(#currSearch + 2, hig)
                     write(" ")
-                elseif k == keys.up then
+                elseif key == "up" then
                     if currHistoryItem > 1 then
                         currHistoryItem = currHistoryItem - 1
                         currSearch = sessionSearches[currHistoryItem]
@@ -1358,7 +1639,7 @@ local function search(direction, research, currword, wrapSearchPos)
                         setpos(2, hig)
                         write(currSearch)
                     end
-                elseif k == keys.down then
+                elseif key == "down" then
                     if currHistoryItem < #sessionSearches then
                         currHistoryItem = currHistoryItem + 1
                         currSearch = sessionSearches[currHistoryItem]
@@ -1681,9 +1962,10 @@ else
 end
 
 while running == true do
-    local event, var1, var2, var3 = pullEventWRMP()
+    local key = pullTypeaheadWRMP()
     resetSize()
-    if event == "char" then
+    if isCharacterKey(key) then
+        local var1 = getSelfInsert(key)
         if var1 == ":" then
             clearScreenLine(hig)
             local cmd = pullCommand(":", false)
@@ -2311,7 +2593,7 @@ while running == true do
                 local _, ch
                 if not cmdtab[2] then
                     sendMsg("Emulating held control until next key press:")
-                    _, ch = os.pullEvent("char")
+                    _, ch = os.pullEvent("char")  -- TODO pull one key from the typeahead, modify it with ctrl and prepend it again
                     sendMsg("Sent CONTROL + "..ch)
                 else
                     ch = cmdtab[2]
@@ -2410,7 +2692,7 @@ while running == true do
             currCursorY = hig - 1
             drawFile(true)
         elseif var1 == "r" then
-            local _, chr = pullChar()
+            local chr = pullTypeaheadChar()
             filelines[currCursorY + currFileOffset] = string.sub(filelines[currCursorY + currFileOffset], 1, currCursorX + currXOffset - 1) .. chr .. string.sub(filelines[currCursorY + currFileOffset], currCursorX + currXOffset + 1, #(filelines[currCursorY + currFileOffset]))
             recalcMLCs()
             drawFile(true)
@@ -2464,7 +2746,7 @@ while running == true do
             moveCursorRight(0)
             insertMode()
         elseif var1 == "Z" then
-            local _,c = pullChar()
+            local c = pullTypeaheadChar()
             if c == "Q" then
                 setcolors(colors.black, colors.white)
                 clear()
@@ -2487,7 +2769,7 @@ while running == true do
                 end
             end
         elseif var1 == "y" then
-            local _, c = pullChar()
+            local c = pullTypeaheadChar()
             if c == "y" then
                 copybuffer = filelines[currCursorY + currFileOffset]
                 copytype = "line"
@@ -2499,14 +2781,14 @@ while running == true do
                 end
                 copytype = "text"
             elseif c == "i" then
-                local _, ch = pullChar()
+                local ch = pullTypeaheadChar()
                 if ch == "w" then
                     local word,beg,ed = str.wordOfPos(filelines[currCursorY + currFileOffset], currCursorX + currXOffset)
                     copybuffer = word
                     copytype = "text"
                 end
             elseif c == "a" then
-                local _, ch = pullChar()
+                local ch = pullTypeaheadChar()
                 if ch == "w" then
                     local word,beg,ed = str.wordOfPos(filelines[currCursorY + currFileOffset], currCursorX + currXOffset)
                     copybuffer = word
@@ -2533,7 +2815,7 @@ while running == true do
         elseif var1 == "d" then
             lastSearchPos = nil
             lastSearchLine = nil
-            local _, c = pullChar()
+            local c = pullTypeaheadChar()
             if c == "d" then
                 copybuffer = filelines[currCursorY + currFileOffset]
                 copytype = "line"
@@ -2553,7 +2835,7 @@ while running == true do
                 filelines[currCursorY + currFileOffset] = string.sub(filelines[currCursorY + currFileOffset], 1, beg - 1) .. string.sub(filelines[currCursorY + currFileOffset], ed + 1, #filelines[currCursorY + currFileOffset])
                 fileContents[currfile]["unsavedchanges"] = true
             elseif c == "i" then
-                local _, ch = pullChar()
+                local ch = pullTypeaheadChar()
                 local word,beg,ed
                 if ch == "w" then
                     word,beg,ed = str.wordOfPos(filelines[currCursorY + currFileOffset], currCursorX + currXOffset)
@@ -2564,7 +2846,7 @@ while running == true do
                     currCursorX = beg - 1
                 end
             elseif c == "a" then
-                local _, ch = pullChar()
+                local ch = pullTypeaheadChar()
                 if ch == "w" then
                     local word,beg,ed = str.wordOfPos(filelines[currCursorY + currFileOffset], currCursorX + currXOffset)
                     copybuffer = word
@@ -2685,7 +2967,7 @@ while running == true do
             local _, ch
             local var = 0
             while tonumber(var) ~= nil do
-                _, var = pullChar()
+                var = pullTypeaheadChar()
                 if tonumber(var) ~= nil then
                     num = num .. var
                 else
@@ -2693,7 +2975,7 @@ while running == true do
                 end
             end
             if ch == "y" then
-                _, ch = pullChar()
+                ch = pullTypeaheadChar()
                 if ch == "y" then
                     if not (currCursorY + currFileOffset + tonumber(num) > #filelines) then
                         copybuffer = {}
@@ -2704,7 +2986,7 @@ while running == true do
                     end
                 end
             elseif ch == "d" then
-                _, ch = pullChar()
+                ch = pullTypeaheadChar()
                 if ch == "d" then
                     if not (currCursorY + currFileOffset + tonumber(num) > #filelines) then
                         copybuffer = {}
@@ -2721,7 +3003,7 @@ while running == true do
                     end
                 end
             elseif ch == "g" then
-                _, ch = pullChar()
+                ch = pullTypeaheadChar()
                 if ch == "g" then
                     currCursorY = tonumber(num)
                     currFileOffset = 0
@@ -2866,7 +3148,7 @@ while running == true do
                     end
                 end
             elseif ch == "f" or ch == "t" then
-                local _,c = pullChar()
+                local c = pullTypeaheadChar()
                 local idx = str.indicesOfLetter(filelines[currCursorY + currFileOffset], c)
                 for i=1,tonumber(num),1 do
                     if #idx > 0 then
@@ -2897,7 +3179,7 @@ while running == true do
                 end
                 drawFile()
             elseif ch == "F" or ch == "T" then
-                local _,c = pullChar()
+                local c = pullTypeaheadChar()
                 local idx = str.indicesOfLetter(filelines[currCursorY + currFileOffset], c)
                 if #idx > 0 then
                     if currCursorX + currFileOffset > idx[1] + jumpoffset then
@@ -2925,7 +3207,7 @@ while running == true do
         elseif var1 == "g" then
             lastSearchPos = nil
             lastSearchLine = nil
-            local _,c = pullChar()
+            local c = pullTypeaheadChar()
             if c == "J" then
                 filelines[currCursorY + currFileOffset] = filelines[currCursorY + currFileOffset] .. filelines[currCursorY + currFileOffset + 1]
                 table.remove(filelines, currCursorY + currFileOffset + 1)
@@ -3120,7 +3402,7 @@ while running == true do
         elseif var1 == "f" or var1 == "t" then
             lastSearchPos = nil
             lastSearchLine = nil
-            local _,c = pullChar()
+            local c = pullTypeaheadChar()
             local idx = str.indicesOfLetter(filelines[currCursorY + currFileOffset], c)
             if #idx > 0 then
                 if currCursorX + currFileOffset < idx[#idx] - jumpoffset then
@@ -3151,7 +3433,7 @@ while running == true do
         elseif var1 == "F" or var1 == "T" then
             lastSearchPos = nil
             lastSearchLine = nil
-            local _,c = pullChar()
+            local c = pullTypeaheadChar()
             local idx = str.indicesOfLetter(filelines[currCursorY + currFileOffset], c)
             if #idx > 0 then
                 if currCursorX + currFileOffset > idx[1] + jumpoffset then
@@ -3234,7 +3516,7 @@ while running == true do
         elseif var1 == "c" then
             lastSearchPos = nil
             lastSearchLine = nil
-            local _, c = pullChar()
+            local c = pullTypeaheadChar()
             if c == "c" then
                 filelines[currCursorY + currFileOffset] = ""
                 currCursorX = 1
@@ -3250,7 +3532,7 @@ while running == true do
                 fileContents[currfile]["unsavedchanges"] = true
                 insertMode()
             elseif c == "i" then
-                local _, ch = pullChar()
+                local ch = pullTypeaheadChar()
                 if ch == "w" then
                     local word,beg,ed = str.wordOfPos(filelines[currCursorY + currFileOffset], currCursorX + currXOffset)
                     filelines[currCursorY + currFileOffset] = string.sub(filelines[currCursorY + currFileOffset], 1, beg - 1) .. string.sub(filelines[currCursorY + currFileOffset], ed + 1, #filelines[currCursorY + currFileOffset])
@@ -3381,18 +3663,15 @@ while running == true do
             local currword = str.wordOfPos(filelines[currCursorY + currFileOffset], currCursorX + currXOffset, true)
             search("backward", false, currword)
         end
-    elseif event == "key" then
-        if var1 == keys.left then
+    else
+        if key == "left" then
             moveCursorLeft()
-        elseif var1 == keys.right then
+        elseif key == "right" then
             moveCursorRight(1)
-        elseif var1 == keys.up then
+        elseif key == "up" then
             moveCursorUp()
-        elseif var1 == keys.down then
+        elseif key == "down" then
             moveCursorDown()
         end
-    elseif event == "term_resize" then
-        resetSize()
-        redrawTerm()
     end
 end
