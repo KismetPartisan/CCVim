@@ -1190,6 +1190,8 @@ if fs.exists("/vim/.vimrc") then
                         _,k = os.pullEvent("key")
                     end
                 end
+            elseif rctable[1] == "finish" then
+                break
             elseif rctable[1] ~= "" and rctable[1] ~= nil then
                 error("Unrecognized vimrc command " .. rctable[1] .. ". Full vimscript is not yet supported.")
             end
