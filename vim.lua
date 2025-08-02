@@ -119,6 +119,7 @@ local scrollOption = 10
 local modeMsg
 local typeahead = {}  -- String keys and pseudokeys
 local typeaheadUpdates = {}  -- Mouse position updates
+local inputProperties = {mouseX = 1, mouseY = 1}
 local activeModifiers = {}
 local prefixedModifiers = {}
 local actionsTrie = Trie.new()
@@ -442,7 +443,8 @@ local function pullTypeahead()
         waitForEvents()
         key = table.remove(typeahead, 1)
     end
-    table.remove(typeaheadUpdates, 1)
+    local upd = table.remove(typeaheadUpdates, 1)
+    itertools.update(inputProperties, upd)
     return key
 end
 

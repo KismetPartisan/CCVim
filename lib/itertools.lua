@@ -43,4 +43,8 @@ local function product(lstlst)
     return productNext, lstlst, indices
 end
 
-return { product = product, collect = collect }
+local function update(dst, src)
+    collectInto(dst, pairs(src))
+end
+
+return { product = product, collect = collect, update = update }
