@@ -99,7 +99,25 @@ local jumpoffset = 0 --offset for t/T jumping before/after a letter
 local currfile = 1
 local fileContents = {}
 local motd = false
-local remappings = {}
+local modeMappings = {
+    n = Trie.new(),
+    i = Trie.new(),
+    c = Trie.new(),
+}
+local mappingCommands = {
+    map = {mode = "", remap = true},
+    ["map!"] = {mode = "!", remap = true},
+    nmap = {mode = "n", remap = true},
+    imap = {mode = "i", remap = true},
+    cmap = {mode = "c", remap = true},
+    noremap = {mode = "", remap = false},
+    ["noremap!"] = {mode = "!", remap = false},
+    nnoremap = {mode = "n", remap = false},
+    inoremap = {mode = "i", remap = false},
+    cnoremap = {mode = "c", remap = false},
+}
+local currentMode = "n"
+local noremapFor = 0
 local filetypearr = {}
 local mobile = false
 local linenumbers = false
@@ -266,6 +284,29 @@ end
 local function registerActionMulti(components, getCb)
     for _, lst in itertools.product(components) do
         registerAction(table.concat(lst), getCb(lst))
+    end
+end
+
+local function registerMapping(src, dst, opts)
+    opts = opts or {}
+    local srcArr = keyseq.parseKeySequence(src, keyNormalisation, modifierOrder)
+    local dstArr = keyseq.parseKeySequence(dst, keyNormalisation, modifierOrder)
+    local mode = opts.mode or ""
+    if mode == "" then
+        mode = "n"
+    elseif mode == "!" then
+        mode = "ic"
+    end
+    local remap = opts.remap or false
+    local entry = {
+        dst = dstArr,
+        remap = remap,
+    }
+    for m in mode:gmatch(".") do
+        local trie = modeMappings[m]
+        if trie ~= nil then
+            trie:put(srcArr, entry)
+        end
     end
 end
 
@@ -445,13 +486,18 @@ local function pullTypeahead()
     end
     local upd = table.remove(typeaheadUpdates, 1)
     itertools.update(inputProperties, upd)
+    if noremapFor > 0 then
+        noremapFor = noremapFor - 1
+    end
     return key
 end
 
+local applyMappings
+
 -- pull from typeahead with remaps
 local function pullTypeaheadWRMP()
+    applyMappings()
     local key = pullTypeahead()
-    key = remappings[key] or key
     return key
 end
 
@@ -464,13 +510,60 @@ local function peekTypeahead(idx)
 end
 
 local function peekTypeaheadWRMP(idx)
+    applyMappings()
     local key = peekTypeahead(idx)
-    key = remappings[key] or key
     return key
 end
 
 local function typeaheadLength()
     return #typeahead
+end
+
+function applyMappings()
+    while noremapFor < 1 do
+        local trie = modeMappings[currentMode]
+        if trie == nil then
+            return
+        end
+        local i = 0
+        local cons = trie:consumer()
+        while true do
+            i = i + 1
+            local key = peekTypeahead(i)
+            if not cons:next(key) then
+                break
+            end
+            if not cons:hasNext() then
+                break
+            end
+        end
+        local len, entry = cons:getDeepest()
+        if len > 0 then
+            local dst = entry.dst or {}
+            if #dst < 1 then
+                for _ = 1, len do
+                    pullTypeahead()
+                end
+            else
+                local saveProps = inputProperties
+                inputProperties = {}
+                for _ = 1, len do
+                    pullTypeahead()
+                end
+                local squashedUpdate = inputProperties
+                inputProperties = saveProps
+                insertTypeahead(dst[1], {update = squashedUpdate, index = 1})
+                for i = 2, #dst do
+                    insertTypeahead(dst[i], {index = i})
+                end
+                if not entry.remap then
+                    noremapFor = #dst
+                end
+            end
+        else
+            noremapFor = 1
+        end
+    end
 end
 
 local function pullCount()  -- Returns string
@@ -496,6 +589,8 @@ local function pullCommand(input, numeric, len)
     end
     local x,y = 1, hig
     local oldModeMsg = modeMsg
+    local prevMode = currentMode
+    currentMode = "c"
 
     local backspace = false
     local finish = false
@@ -553,6 +648,7 @@ local function pullCommand(input, numeric, len)
         end
     until (key == "cr") or (finish == true)
     modeMsg = oldModeMsg
+    currentMode = prevMode
     return input
 end
 
@@ -1156,6 +1252,8 @@ end
 local function insertMode()
     drawFile(true)
     setModeMsg("-- INSERT --")
+    local prevMode = currentMode
+    currentMode = "i"
     local key
     while key ~= "tab" do
         key = pullTypeaheadWRMP()
@@ -1273,6 +1371,7 @@ local function insertMode()
         end
     end
     setModeMsg(nil)
+    currentMode = prevMode
 end
 
 --Parse .vimrc file here
@@ -1300,9 +1399,10 @@ if fs.exists("/vim/.vimrc") then
                 end
             elseif rctable[1] == "syntax" and rctable[2] == "on" then
                 syntaxhighlighting = true
-            elseif rctable[1] == "map" then
+            elseif mappingCommands[rctable[1]] ~= nil then
                 if rctable[2] and rctable[3] or not (#rctable > 3) then
-                    remappings[rctable[2]] = rctable[3]
+                    local opts = mappingCommands[rctable[1]]
+                    registerMapping(rctable[2], rctable[3], opts)
                 else
                     print("Mapping requires 2 arguments.")
                     sendMsg("Press enter to continue...")
@@ -1322,9 +1422,6 @@ end
 
 local function pullChar()
     local _, tm = os.pullEvent("char")
-    if remappings[tm] then
-        tm = remappings[tm]
-    end
     return _, tm
 end
 
@@ -1333,6 +1430,14 @@ local function pullTypeaheadChar()
     repeat
         ch = getSelfInsert(pullTypeaheadWRMP())
     until #ch == 1
+    return ch
+end
+
+local function pullTypeaheadCharMode(mode)
+    local prevMode = currentMode
+    currentMode = mode
+    local ch = pullTypeaheadChar()
+    currentMode = prevMode
     return ch
 end
 
@@ -1718,6 +1823,8 @@ local searchPrefix = "/"
 local function search(direction, research, currword, wrapSearchPos)
     local localcase = ignorecase
     local oldModeMsg = modeMsg
+    local prevMode = currentMode
+    currentMode = "c"
     clearScreenLine(hig)
     setcolors(colors.black, colors.white)
     setpos(1, hig)
@@ -1744,7 +1851,7 @@ local function search(direction, research, currword, wrapSearchPos)
         table.insert(sessionSearches, #sessionSearches + 1, "")
         while searching do
             modeMsg = searchPrefix .. currSearch
-            local key = pullTypeahead()
+            local key = pullTypeaheadWRMP()
             if isCharacterKey(key) then
                 local k = getSelfInsert(key)
                 currSearch = currSearch .. k
@@ -1909,6 +2016,7 @@ local function search(direction, research, currword, wrapSearchPos)
         end
     end
     modeMsg = oldModeMsg
+    currentMode = prevMode
 end
 
 
@@ -2942,7 +3050,7 @@ registerAction("L", function()
             drawFile(true)
         end)
 registerAction("r", function()
-            local chr = pullTypeaheadChar()
+            local chr = pullTypeaheadCharMode("i")
             filelines[currCursorY + currFileOffset] = string.sub(filelines[currCursorY + currFileOffset], 1, currCursorX + currXOffset - 1) .. chr .. string.sub(filelines[currCursorY + currFileOffset], currCursorX + currXOffset + 1, #(filelines[currCursorY + currFileOffset]))
             recalcMLCs()
             drawFile(true)
@@ -3460,7 +3568,7 @@ registerActionMulti({{"f", "t"}}, function(lst)
     local var1 = lst[1]
     return (function ()
         resetLastSearch()
-        local c = pullTypeaheadChar()
+        local c = pullTypeaheadCharMode("i")
         local idx = str.indicesOfLetter(filelines[currCursorY + currFileOffset], c)
         for i = 1, repeatCount1, 1 do
             if #idx > 0 then
@@ -3496,7 +3604,7 @@ registerActionMulti({{"F", "T"}}, function(lst)
     local var1 = lst[1]
     return (function ()
             resetLastSearch()
-            local c = pullTypeaheadChar()
+            local c = pullTypeaheadCharMode("i")
             local idx = str.indicesOfLetter(filelines[currCursorY + currFileOffset], c)
             -- TODO Figure out if the lack of repetition is intentional
             if #idx > 0 then
