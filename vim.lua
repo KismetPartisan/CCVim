@@ -414,6 +414,16 @@ local function waitForEvents()
         if s < 0 then
             translatedKey = "scrollwheelup"
         end
+        local mods = getLatestModifiers(true)
+        if mods.S then
+            translatedKey = "S-" .. translatedKey
+        end
+        if mods.A then
+            translatedKey = "A-" .. translatedKey
+        end
+        if mods.C then
+            translatedKey = "C-" .. translatedKey
+        end
         insertTypeahead(translatedKey, {update = {mouseX = v2, mouseY = v3}})
     elseif e == "paste" then
         getLatestModifiers(true)  -- Drop prefix states
@@ -3769,10 +3779,26 @@ registerAction("<C-e>", function()
     scrollWindowY(repeatCount1, false)
 end)
 registerAction("<scrollwheelup>", function()
-    scrollWindowY(-repeatCount1, false)
+    scrollWindowY(-repeatCount1 * 3, false)
 end)
 registerAction("<scrollwheeldown>", function()
-    scrollWindowY(repeatCount1, false)
+    scrollWindowY(repeatCount1 * 3, false)
+end)
+registerAction("<S-scrollwheelup>", function()
+    local multiplier = hig - 3
+    if multiplier < 1 then
+        multiplier = 1
+    end
+    local amount = multiplier * repeatCount1 + 2
+    scrollWindowY(-amount, false)
+end)
+registerAction("<S-scrollwheeldown>", function()
+    local multiplier = hig - 3
+    if multiplier < 1 then
+        multiplier = 1
+    end
+    local amount = multiplier * repeatCount1 + 2
+    scrollWindowY(amount, false)
 end)
 registerAction("<pageup>", function()
     local multiplier = hig - 3
