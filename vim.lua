@@ -113,6 +113,8 @@ local ignorecase = false
 local lastSearchPos
 local lastSearchLine
 local sessionSearches = {}
+local repeatCount0 = 0
+local repeatCount1 = 1
 local modeMsg
 local typeahead = {}  -- String keys and pseudokeys
 local typeaheadUpdates = {}  -- Mouse position updates
@@ -272,6 +274,8 @@ local function resetSize()
         wid, hig = term.getSize()
     end
 end
+
+local resetLastSearch
 
 local function clear()
     if monitor then
@@ -455,6 +459,23 @@ end
 
 local function typeaheadLength()
     return #typeahead
+end
+
+local function pullCount()  -- Returns string
+    local ch = peekTypeaheadWRMP(1)
+    if ch:find("[^1-9]") then
+        return ""
+    end
+    pullTypeahead()
+    local builder = {ch}
+    while true do
+        ch = peekTypeaheadWRMP(1)
+        if ch:find("%D") then
+            return table.concat(builder)
+        end
+        pullTypeahead()
+        table.insert(builder, ch)
+    end
 end
 
 local function pullCommand(input, numeric, len)
@@ -2723,17 +2744,120 @@ registerAction("I", function()
             insertMode()
         end)
 registerAction("h", function()
-            moveCursorLeft()
-        end)
+    resetLastSearch()
+    if repeatCount0 > 0 then
+        -- TODO figure out why does the original repetition code contain this
+        currCursorX = currCursorX - repeatCount0 + 1
+    else
+        currCursorX = currCursorX - 1
+    end
+    if currCursorX + currXOffset < 1 then
+        currCursorX = 1
+        currXOffset = 0
+    else
+        while currCursorX < 1 do
+            currCursorX = currCursorX + 1
+            currXOffset = currXOffset - 1
+        end
+    end
+    drawFile()
+    oldx = nil
+end)
 registerAction("j", function()
-            moveCursorDown()
-        end)
+    resetLastSearch()
+    if oldx ~= nil then
+        currCursorX = oldx - currXOffset
+    else
+        oldx = currCursorX + currXOffset
+    end
+    currCursorY = currCursorY + repeatCount1
+    if currCursorY + currFileOffset > #filelines then
+        currCursorY = #filelines
+        currFileOffset = 0
+    end
+    if currCursorX + currXOffset > #(filelines[currCursorY + currFileOffset]) + 1 then
+        if filelines[currCursorY + currFileOffset] ~= "" then
+            currCursorX = #(filelines[currCursorY + currFileOffset]) + 1 - currXOffset
+        else
+            currCursorX = 1
+            currXOffset = 0
+        end
+    end
+    if currCursorX < 1 then
+        while currCursorX < 1 do
+            currXOffset = currXOffset - 1
+            currCursorX = currCursorX + 1
+        end
+    elseif currCursorX + lineoffset > wid then
+        while currCursorX + lineoffset > wid do
+            currXOffset = currXOffset + 1
+            currCursorX = currCursorX - 1
+        end
+    end
+    while currCursorY > hig - 1 do
+        currCursorY = currCursorY - 1
+        currFileOffset = currFileOffset + 1
+    end
+    drawFile(repeatCount1 > 1)  -- Force redraw to avoid phantom cursor
+end)
 registerAction("k", function()
-            moveCursorUp()
-        end)
+    resetLastSearch()
+    if oldx ~= nil then
+        currCursorX = oldx - currXOffset
+    else
+        oldx = currCursorX + currXOffset
+    end
+    currCursorY = currCursorY - repeatCount1
+    if currCursorY + currFileOffset < 1 then
+        currCursorY = 1
+        currFileOffset = 0
+    end
+    if currCursorX + currXOffset > #(filelines[currCursorY + currFileOffset]) + 1 then
+        if filelines[currCursorY + currFileOffset] ~= "" then
+            currCursorX = #(filelines[currCursorY + currFileOffset]) + 1 - currXOffset
+        else
+            currCursorX = 1
+            currXOffset = 0
+        end
+    end
+    if currCursorX < 1 then
+        while currCursorX < 1 do
+            currXOffset = currXOffset - 1
+            currCursorX = currCursorX + 1
+        end
+    elseif currCursorX + lineoffset > wid then
+        while currCursorX + lineoffset > wid do
+            currXOffset = currXOffset + 1
+            currCursorX = currCursorX - 1
+        end
+    end
+    while currCursorY < 1 do
+        currCursorY = currCursorY + 1
+        currFileOffset = currFileOffset - 1
+    end
+    while currFileOffset < 0 do
+        currFileOffset = currFileOffset + 1
+    end
+    drawFile(repeatCount1 > 1)  -- Force redraw to avoid phantom cursor
+end)
 registerAction("l", function()
-            moveCursorRight(1)
-        end)
+    resetLastSearch()
+    currCursorX = currCursorX + repeatCount1
+    if filelines[currCursorY + currFileOffset] ~= nil then
+        if currCursorX + currXOffset < #filelines[currCursorY + currFileOffset] then
+            if currCursorX + currXOffset > #filelines[currCursorY + currFileOffset] then
+                currXOffset = 0
+                currCursorX = #filelines[currCursorY + currFileOffset] + 1
+            end
+            while currCursorX + lineoffset > wid do
+                currCursorX = currCursorX - 1
+                currXOffset = currXOffset + 1
+            end
+            drawFile()
+        end
+    end
+    oldx = nil
+end)
 registerAction("H", function()
             currCursorY = 1
             drawFile(true)
@@ -2829,9 +2953,16 @@ registerAction("ZZ", function()
                 end
             end)
 registerAction("yy", function()
-                copybuffer = filelines[currCursorY + currFileOffset]
-                copytype = "line"
-            end)
+    local count = #filelines - currCursorY - currFileOffset
+    if count > repeatCount1 then
+        count = repeatCount1
+    end
+    copybuffer = {}
+    for i = 1, count, 1 do
+        table.insert(copybuffer, #copybuffer + 1, filelines[currCursorY + currFileOffset + i - 1])
+    end
+    copytype = "linetable"
+end)
 registerAction("yw", function()
                 local word,beg,ed = str.wordOfPos(filelines[currCursorY + currFileOffset], currCursorX + currXOffset)
                 copybuffer = word
@@ -2869,17 +3000,27 @@ registerAction("x", function()
                 fileContents[currfile]["unsavedchanges"] = true
             end
         end)
-local function resetLastSearch()
+function resetLastSearch()
             lastSearchPos = nil
             lastSearchLine = nil
         end
 local afterDelete
 registerAction("dd", function() resetLastSearch()
-                copybuffer = filelines[currCursorY + currFileOffset]
-                copytype = "line"
-                table.remove(filelines, currCursorY + currFileOffset)
-                fileContents[currfile]["unsavedchanges"] = true
-            afterDelete() end)
+    local count = #filelines - currCursorY - currFileOffset
+    if count > repeatCount1 then
+        count = repeatCount1
+    end
+    copybuffer = {}
+    for i = 1, count, 1 do
+        table.insert(copybuffer, #copybuffer + 1, filelines[currCursorY + currFileOffset + i - 1])
+    end
+    copytype = "linetable"
+    for i = 1, count, 1 do
+        table.remove(filelines, currCursorY + currFileOffset)
+    end
+    fileContents[currfile]["unsavedchanges"] = true
+    afterDelete()
+end)
 registerAction("dw", function() resetLastSearch()
                 local word,beg,ed = str.wordOfPos(filelines[currCursorY + currFileOffset], currCursorX + currXOffset)
                 copybuffer = word
@@ -3023,96 +3164,15 @@ registerAction("0", function()
             currXOffset = 0
             drawFile()
         end)
-registerActionMulti({{"1", "2", "3", "4", "5", "6", "7", "8", "9"}}, function(lst)
-    local var1 = lst[1]
-    return function()
-            lastSearchPos = nil
-            lastSearchLine = nil
-            local num = var1 --num IS A STRING! Convert it to a number with tonumber() before use!
-            local _, ch
-            local var = 0
-            while tonumber(var) ~= nil do
-                var = pullTypeaheadChar()
-                if tonumber(var) ~= nil then
-                    num = num .. var
-                else
-                    ch = var
-                end
-            end
-            if ch == "y" then
-                ch = pullTypeaheadChar()
-                if ch == "y" then
-                    if not (currCursorY + currFileOffset + tonumber(num) > #filelines) then
-                        copybuffer = {}
-                        for i=1,tonumber(num),1 do
-                            table.insert(copybuffer, #copybuffer + 1, filelines[currCursorY + currFileOffset + i - 1])
-                        end
-                        copytype = "linetable"
-                    end
-                end
-            elseif ch == "d" then
-                ch = pullTypeaheadChar()
-                if ch == "d" then
-                    if not (currCursorY + currFileOffset + tonumber(num) > #filelines) then
-                        copybuffer = {}
-                        for i=1,tonumber(num),1 do
-                            table.insert(copybuffer, #copybuffer + 1, filelines[currCursorY + currFileOffset + i - 1])
-                        end
-                        copytype = "linetable"
-                        for i=1,tonumber(num),1 do
-                            table.remove(filelines, currCursorY + currFileOffset)
-                        end
-                        recalcMLCs(true)
-                        drawFile(true)
-                        fileContents[currfile]["unsavedchanges"] = true
-                    end
-                end
-            elseif ch == "g" then
-                ch = pullTypeaheadChar()
-                if ch == "g" then
-                    currCursorY = tonumber(num)
-                    currFileOffset = 0
-                    currCursorX = 1
-                    currXOffset = 0
-                    while currCursorY > hig - 1 do
-                        currCursorY = currCursorY - 1
-                        currFileOffset = currFileOffset + 1
-                    end
-                    drawFile()
-                elseif ch == "t" then
-                    fileContents[currfile] = filelines
-                    fileContents[currfile]["cursor"] = {currCursorX, currXOffset, currCursorY, currFileOffset}
-                    currfile = tonumber(num)
-                    if currfile <= #fileContents and currfile > 1 then
-                        filelines = fileContents[currfile]
-                        if fileContents[currfile]["cursor"] then
-                            currCursorX = fileContents[currfile]["cursor"][1]
-                            currXOffset = fileContents[currfile]["cursor"][2]
-                            currCursorY = fileContents[currfile]["cursor"][3]
-                            currFileOffset = fileContents[currfile]["cursor"][4]
-                        end
-                        recalcMLCs(true)
-                        drawFile(true)
-                        sendMsg("\""..openfiles[currfile].."\" "..#filelines.."L, "..tab.countchars(filelines).."C")
-                    end
-                elseif ch == "e" or ch == "E" then
-                    for i=1,tonumber(num),1 do
-                        local begs = str.wordEnds(filelines[currCursorY + currFileOffset], not string.match(ch, "%u"))
-                        if currCursorX + currXOffset > begs[1] then
-                            currCursorX = currCursorX - 1
-                            while not tab.find(begs, currCursorX + currXOffset) do
-                                currCursorX = currCursorX - 1
-                            end
-                            while currCursorX + lineoffset > wid do
-                                currCursorX = currCursorX + 1
-                                currXOffset = currXOffset - 1
-                            end
-                        end
-                    end
-                    drawFile()
-                end
-            elseif ch == "G" then
-                currCursorY = tonumber(num)
+registerAction("gJ", function() resetLastSearch()
+                filelines[currCursorY + currFileOffset] = filelines[currCursorY + currFileOffset] .. filelines[currCursorY + currFileOffset + 1]
+                table.remove(filelines, currCursorY + currFileOffset + 1)
+                recalcMLCs()
+                drawFile(true)
+                fileContents[currfile]["unsavedchanges"] = true
+            end)
+registerAction("gg", function() resetLastSearch()
+                currCursorY = repeatCount1
                 currFileOffset = 0
                 currCursorX = 1
                 currXOffset = 0
@@ -3121,85 +3181,13 @@ registerActionMulti({{"1", "2", "3", "4", "5", "6", "7", "8", "9"}}, function(ls
                     currFileOffset = currFileOffset + 1
                 end
                 drawFile()
-            elseif ch == "h" then
-                currCursorX = currCursorX - tonumber(num) + 1
-                if currCursorX + currXOffset < 1 then
-                    currCursorX = 1
-                    currXOffset = 0
-                else
-                    while currCursorX < 1 do
-                        currCursorX = currCursorX + 1
-                        currXOffset = currXOffset - 1
-                    end
-                end
-                drawFile()
-            elseif ch == "l" then
-                currCursorX = currCursorX + tonumber(num)
-                if currCursorX + currXOffset > #filelines[currCursorY + currFileOffset] then
-                    currXOffset = 0
-                    currCursorX = #filelines[currCursorY + currFileOffset] + 1
-                end
-                while currCursorX + lineoffset > wid do
-                    currCursorX = currCursorX - 1
-                    currXOffset = currXOffset + 1
-                end
-                drawFile()
-            elseif ch == "j" then
-                currCursorY = currCursorY + tonumber(num)
-                if currCursorY + currFileOffset > #filelines then
-                    currCursorY = #filelines
-                    currFileOffset = 0
-                end
-                while currCursorY > hig - 1 do
-                    currCursorY = currCursorY - 1
-                    currFileOffset = currFileOffset + 1
-                end
-                drawFile()
-            elseif ch == "k" then
-                currCursorY = currCursorY - tonumber(num)
-                if currCursorY + currFileOffset < 1 then
-                    currCursorY = 1
-                    currFileOffset = 0
-                end
-                while currCursorY < 1 do
-                    currCursorY = currCursorY + 1
-                    currFileOffset = currFileOffset - 1
-                end
-                drawFile()
-            elseif ch == "w" or ch == "W" then
-                for i=1,tonumber(num),1 do
-                    local begs = str.wordBeginnings(filelines[currCursorY + currFileOffset], not string.match(ch, "%u"))
-                    if currCursorX + currXOffset < begs[#begs] then
-                        currCursorX = currCursorX + 1
-                        while not tab.find(begs, currCursorX + currXOffset) do
-                            currCursorX = currCursorX + 1
-                        end
-                        while currCursorX + lineoffset > wid do
-                            currCursorX = currCursorX - 1
-                            currXOffset = currXOffset + 1
-                        end
-                        oldx = currCursorX + currXOffset
-                        drawFile()
-                    end
-                end
-            elseif ch == "e" or ch == "E" then
-                for i=1,tonumber(num),1 do
-                    local begs = str.wordEnds(filelines[currCursorY + currFileOffset], not string.match(ch, "%u"))
-                    if currCursorX + currXOffset < begs[#begs] then
-                        currCursorX = currCursorX + 1
-                        while not tab.find(begs, currCursorX + currXOffset) do
-                            currCursorX = currCursorX + 1
-                        end
-                        while currCursorX + lineoffset > wid do
-                            currCursorX = currCursorX - 1
-                            currXOffset = currXOffset + 1
-                        end
-                        drawFile()
-                    end
-                end
-            elseif ch == "b" or ch == "B" then
-                for i=1,tonumber(num),1 do
-                    local begs = str.wordBeginnings(filelines[currCursorY + currFileOffset], not string.match(ch, "%u"))
+            end)
+registerActionMulti({{"g"}, {"e", "E"}}, function(lst)
+    local c = lst[2]
+    return (function() resetLastSearch()
+            for i = 1, repeatCount1, 1 do
+                local begs = str.wordEnds(filelines[currCursorY + currFileOffset], not string.match(c, "%u"))
+                if begs[#begs] then
                     if currCursorX + currXOffset > begs[1] then
                         currCursorX = currCursorX - 1
                         while not tab.find(begs, currCursorX + currXOffset) do
@@ -3209,99 +3197,13 @@ registerActionMulti({{"1", "2", "3", "4", "5", "6", "7", "8", "9"}}, function(ls
                             currCursorX = currCursorX + 1
                             currXOffset = currXOffset - 1
                         end
-                        drawFile()
-                    end
-                end
-            elseif ch == "f" or ch == "t" then
-                local c = pullTypeaheadChar()
-                local idx = str.indicesOfLetter(filelines[currCursorY + currFileOffset], c)
-                for i=1,tonumber(num),1 do
-                    if #idx > 0 then
-                        if currCursorX + currFileOffset < idx[#idx] - jumpoffset then
-                            local oldcursor = currCursorX
-                            currCursorX = currCursorX + (1 + jumpoffset)
-                            while not tab.find(idx, currCursorX + currXOffset) and not (currCursorX + currXOffset >= #filelines[currCursorY + currFileOffset]) do
-                                currCursorX = currCursorX + 1
-                            end
-                            if not tab.find(idx, currCursorX + currXOffset) then
-                                currCursorX = oldcursor
-                            end
-                            if ch == "t" then
-                                currCursorX = currCursorX - 1
-                            end
-                            while currCursorX + lineoffset > wid do
-                                currCursorX = currCursorX - 1
-                                currXOffset = currXOffset + 1
-                            end
-                            jumpbuffer = {c, ch}
-                            if ch == "t" then
-                                jumpoffset = 1
-                            else
-                                jumpoffset = 0
-                            end
-                        end
-                    end
-                end
-                drawFile()
-            elseif ch == "F" or ch == "T" then
-                local c = pullTypeaheadChar()
-                local idx = str.indicesOfLetter(filelines[currCursorY + currFileOffset], c)
-                if #idx > 0 then
-                    if currCursorX + currFileOffset > idx[1] + jumpoffset then
-                        currCursorX = currCursorX - (1 + jumpoffset)
-                        while not tab.find(idx, currCursorX + currXOffset) and currCursorX > 1 do
-                            currCursorX = currCursorX - 1
-                        end
-                        if ch == "T" then
-                            currCursorX = currCursorX + 1
-                        end
-                        while currCursorX < 1 do
-                            currCursorX = currCursorX + 1
-                            currXOffset = currXOffset - 1
-                        end
-                        drawFile()
-                        jumpbuffer = {c, ch}
-                        if ch == "T" then
-                            jumpoffset = 1
-                        else
-                            jumpoffset = 0
-                        end
+                        oldx = currCursorX + currXOffset
                     end
                 end
             end
-        end
-    end)
-registerAction("gJ", function() resetLastSearch()
-                filelines[currCursorY + currFileOffset] = filelines[currCursorY + currFileOffset] .. filelines[currCursorY + currFileOffset + 1]
-                table.remove(filelines, currCursorY + currFileOffset + 1)
-                recalcMLCs()
-                drawFile(true)
-                fileContents[currfile]["unsavedchanges"] = true
-            end)
-registerAction("gg", function() resetLastSearch()
-                currCursorY = 1
-                currFileOffset = 0
-                currCursorX = 1
-                currXOffset = 0
-                drawFile()
-            end)
-registerActionMulti({{"g"}, {"e", "E"}}, function(lst)
-    local c = lst[2]
-    return (function() resetLastSearch()
-                local begs = str.wordEnds(filelines[currCursorY + currFileOffset], not string.match(c, "%u"))
-                if currCursorX + currXOffset > begs[1] then
-                    currCursorX = currCursorX - 1
-                    while not tab.find(begs, currCursorX + currXOffset) do
-                        currCursorX = currCursorX - 1
-                    end
-                    while currCursorX + lineoffset > wid do
-                        currCursorX = currCursorX + 1
-                        currXOffset = currXOffset - 1
-                    end
-                    drawFile()
-                end
-            end)
+            drawFile()
         end)
+    end)
 registerAction("g_", function() resetLastSearch()
                 currCursorX = #filelines[currCursorY + currFileOffset]
                 currXOffset = 0
@@ -3324,39 +3226,27 @@ registerAction("g_", function() resetLastSearch()
                 drawFile()
             end)
 registerAction("gt", function() resetLastSearch()
-                if #fileContents > 1 then
-                    if currfile ~= #fileContents then
-                        fileContents[currfile] = filelines
-                        fileContents[currfile]["cursor"] = {currCursorX, currXOffset, currCursorY, currFileOffset}
-                        currfile = currfile + 1
-                        filelines = fileContents[currfile]
-                        if fileContents[currfile]["cursor"] then
-                            currCursorX = fileContents[currfile]["cursor"][1]
-                            currXOffset = fileContents[currfile]["cursor"][2]
-                            currCursorY = fileContents[currfile]["cursor"][3]
-                            currFileOffset = fileContents[currfile]["cursor"][4]
-                        end
-                        recalcMLCs(true)
-                        drawFile(true)
-                        sendMsg("\""..openfiles[currfile].."\" "..#filelines.."L, "..tab.countchars(filelines).."C")
-                    else
-                        fileContents[currfile] = filelines
-                        fileContents[currfile]["cursor"] = {currCursorX, currXOffset, currCursorY, currFileOffset}
-                        currfile = 1
-                        filelines = fileContents[currfile]
-                        if fileContents[currfile]["cursor"] then
-                            currCursorX = fileContents[currfile]["cursor"][1]
-                            currXOffset = fileContents[currfile]["cursor"][2]
-                            currCursorY = fileContents[currfile]["cursor"][3]
-                            currFileOffset = fileContents[currfile]["cursor"][4]
-                        end
-                        recalcMLCs(true)
-                        drawFile(true)
-                        sendMsg("\""..openfiles[currfile].."\" "..#filelines.."L, "..tab.countchars(filelines).."C")
-                    end
-                    filename = openfiles[currfile]
-                end
-            end)
+    fileContents[currfile] = filelines
+    fileContents[currfile]["cursor"] = {currCursorX, currXOffset, currCursorY, currFileOffset}
+    if repeatCount0 > 0 then
+        currfile = repeatCount0
+    else
+        currfile = currfile + 1
+    end
+    if currfile > #fileContents then
+        currfile = (currfile - 1) % #fileContents + 1
+    end
+    filelines = fileContents[currfile]
+    if fileContents[currfile]["cursor"] then
+        currCursorX = fileContents[currfile]["cursor"][1]
+        currXOffset = fileContents[currfile]["cursor"][2]
+        currCursorY = fileContents[currfile]["cursor"][3]
+        currFileOffset = fileContents[currfile]["cursor"][4]
+    end
+    recalcMLCs(true)
+    drawFile(true)
+    sendMsg("\""..openfiles[currfile].."\" "..#filelines.."L, "..tab.countchars(filelines).."C")
+end)
 registerAction("gT", function() resetLastSearch()
                 if #fileContents > 1 then
                     if currfile ~= 1 then
@@ -3392,23 +3282,26 @@ registerAction("gT", function() resetLastSearch()
                 end
             end)
 registerAction("G", function()
-            lastSearchPos = nil
-            lastSearchLine = nil
-            currFileOffset = 0
-            currCursorY = #filelines
-            while currCursorY > hig - 1 do
-                currCursorY = currCursorY - 1
-                currFileOffset = currFileOffset + 1
-            end
-            currCursorX = 1
-            currXOffset = 0
-            drawFile()
-        end)
+    resetLastSearch()
+    if repeatCount0 > 0 then
+        currCursorY = repeatCount0
+    else
+        currCursorY = #filelines
+    end
+    currFileOffset = 0
+    currCursorX = 1
+    currXOffset = 0
+    while currCursorY > hig - 1 do
+        currCursorY = currCursorY - 1
+        currFileOffset = currFileOffset + 1
+    end
+    drawFile()
+end)
 registerActionMulti({{"w", "W"}}, function(lst)
     local var1 = lst[1]
     return (function ()
-            lastSearchPos = nil
-            lastSearchLine = nil
+        resetLastSearch()
+        for i = 1, repeatCount1, 1 do
             local begs = str.wordBeginnings(filelines[currCursorY + currFileOffset], not string.match(var1, "%u"))
             if begs[#begs] then
                 if currCursorX + currXOffset < begs[#begs] then
@@ -3424,13 +3317,14 @@ registerActionMulti({{"w", "W"}}, function(lst)
                     drawFile()
                 end
             end
-        end)
+        end
     end)
+end)
 registerActionMulti({{"e", "E"}}, function(lst)
     local var1 = lst[1]
     return (function ()
-            lastSearchPos = nil
-            lastSearchLine = nil
+        resetLastSearch()
+        for i = 1, repeatCount1, 1 do
             local begs = str.wordEnds(filelines[currCursorY + currFileOffset], not string.match(var1, "%u"))
             if begs[#begs] then
                 if currCursorX + currXOffset < begs[#begs] then
@@ -3445,13 +3339,14 @@ registerActionMulti({{"e", "E"}}, function(lst)
                     drawFile()
                 end
             end
-        end)
+        end
     end)
+end)
 registerActionMulti({{"b", "B"}}, function(lst)
     local var1 = lst[1]
     return (function ()
-            lastSearchPos = nil
-            lastSearchLine = nil
+        resetLastSearch()
+        for i = 1, repeatCount1, 1 do
             local begs = str.wordBeginnings(filelines[currCursorY + currFileOffset], not string.match(var1, "%u"))
             if begs[1] then
                 if currCursorX + currXOffset > begs[1] then
@@ -3463,11 +3358,13 @@ registerActionMulti({{"b", "B"}}, function(lst)
                         currCursorX = currCursorX + 1
                         currXOffset = currXOffset - 1
                     end
-                    drawFile()
+                    oldx = currCursorX + currXOffset
                 end
             end
-        end)
+        end
+        drawFile()
     end)
+end)
 registerAction("^", function()
             lastSearchPos = nil
             lastSearchLine = nil
@@ -3487,15 +3384,15 @@ registerAction("^", function()
 registerActionMulti({{"f", "t"}}, function(lst)
     local var1 = lst[1]
     return (function ()
-            lastSearchPos = nil
-            lastSearchLine = nil
-            local c = pullTypeaheadChar()
-            local idx = str.indicesOfLetter(filelines[currCursorY + currFileOffset], c)
+        resetLastSearch()
+        local c = pullTypeaheadChar()
+        local idx = str.indicesOfLetter(filelines[currCursorY + currFileOffset], c)
+        for i = 1, repeatCount1, 1 do
             if #idx > 0 then
                 if currCursorX + currFileOffset < idx[#idx] - jumpoffset then
                     local oldcursor = currCursorX
                     currCursorX = currCursorX + (1 + jumpoffset)
-                    while not tab.find(idx, currCursorX + currXOffset) and currCursorX + currXOffset ~= #filelines[currCursorY + currFileOffset] do
+                    while not tab.find(idx, currCursorX + currXOffset) and currCursorX + currXOffset < #filelines[currCursorY + currFileOffset] do
                         currCursorX = currCursorX + 1
                     end
                     if not tab.find(idx, currCursorX + currXOffset) then
@@ -3517,15 +3414,16 @@ registerActionMulti({{"f", "t"}}, function(lst)
                     end
                 end
             end
-        end)
+        end
     end)
+end)
 registerActionMulti({{"F", "T"}}, function(lst)
     local var1 = lst[1]
     return (function ()
-            lastSearchPos = nil
-            lastSearchLine = nil
+            resetLastSearch()
             local c = pullTypeaheadChar()
             local idx = str.indicesOfLetter(filelines[currCursorY + currFileOffset], c)
+            -- TODO Figure out if the lack of repetition is intentional
             if #idx > 0 then
                 if currCursorX + currFileOffset > idx[1] + jumpoffset then
                     currCursorX = currCursorX - (1 + jumpoffset)
@@ -3767,6 +3665,7 @@ registerAction("#", function()
             local currword = str.wordOfPos(filelines[currCursorY + currFileOffset], currCursorX + currXOffset, true)
             search("backward", false, currword)
         end)
+-- TODO also handle repetitions
 registerAction("<left>", moveCursorLeft)
 registerAction("<right>", function() moveCursorRight(1) end)
 registerAction("<up>", moveCursorUp)
@@ -3776,6 +3675,14 @@ while running == true do
     local cons = actionsTrie:consumer()
     local i = 0
     local prefix = {}
+    local countStr = pullCount()
+    if #countStr > 0 then
+        repeatCount0 = tonumber(countStr)
+        repeatCount1 = repeatCount0
+    else
+        repeatCount0 = 0
+        repeatCount1 = 1
+    end
     while true do
         i = i + 1
         local key
