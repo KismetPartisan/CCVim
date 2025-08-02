@@ -115,6 +115,7 @@ local lastSearchLine
 local sessionSearches = {}
 local repeatCount0 = 0
 local repeatCount1 = 1
+local scrollOption = 10
 local modeMsg
 local typeahead = {}  -- String keys and pseudokeys
 local typeaheadUpdates = {}  -- Mouse position updates
@@ -2597,6 +2598,9 @@ registerAction(":", function()
                 elseif cmdtab[2] == "nolowspec" then
                     lowspec = false
                     drawFile(true)
+                elseif cmdtab[2] == "scroll?" then
+                    -- FIXME message seems to be immediately disappear
+                    sendMsg("  scroll=" .. scrollOption)
                 elseif str.find(cmdtab[2], "=") then
                     local tmp = str.split(cmdtab[2], "=")
                     local comm = tmp[1]
@@ -2621,6 +2625,10 @@ registerAction(":", function()
                     elseif comm == "scale" then
                         if monitor and tonumber(stri) then
                             monitor.setTextScale(tonumber(stri))
+                        end
+                    elseif comm == "scroll" then
+                        if tonumber(stri) then
+                            scrollOption = tonumber(stri)
                         end
                     end
                     resetSize()
@@ -3670,6 +3678,113 @@ registerAction("<left>", moveCursorLeft)
 registerAction("<right>", function() moveCursorRight(1) end)
 registerAction("<up>", moveCursorUp)
 registerAction("<down>", moveCursorDown)
+
+registerAction("<C-u>", function()
+    resetLastSearch()
+    if repeatCount0 > 0 then
+        scrollOption = repeatCount0
+    end
+    currFileOffset = currFileOffset - scrollOption
+    currCursorX = 1
+    currXOffset = 0
+    if currFileOffset < 0 then
+        currCursorY = currCursorY + currFileOffset
+        currFileOffset = 0
+        if currCursorY < 1 then
+            currCursorY = 1
+        end
+    end
+    drawFile(true)
+end)
+registerAction("<C-d>", function()
+    resetLastSearch()
+    if repeatCount0 > 0 then
+        scrollOption = repeatCount0
+    end
+    currFileOffset = currFileOffset + scrollOption
+    currCursorX = 1
+    currXOffset = 0
+    if currCursorY + currFileOffset > #filelines then
+        currCursorY = #filelines - currFileOffset
+        if currCursorY < 1 then
+            currFileOffset = currFileOffset + currCursorY - 1
+            currCursorY = 1
+            if currFileOffset < 0 then
+                currFileOffset = 0
+            end
+        end
+    end
+    drawFile(true)
+end)
+registerAction("<C-b>", function()
+    resetLastSearch()
+    if oldx ~= nil then
+        currCursorX = oldx - currXOffset
+    else
+        oldx = currCursorX + currXOffset
+    end
+    local multiplier = hig - 3
+    if multiplier < 1 then
+        multiplier = 1
+    end
+    local amount = multiplier * repeatCount1 + 2
+    currFileOffset = currFileOffset - amount
+    if currFileOffset < 0 then
+        currCursorY = currCursorY + currFileOffset
+        currFileOffset = 0
+        if currCursorY < 1 then
+            currCursorY = 1
+        end
+    end
+    local line = filelines[currCursorY + currFileOffset]
+    if line and #line < currCursorX + currXOffset then
+        currCursorX = #line - currXOffset
+        if currCursorX < 1 then
+            currXOffset = currXOffset + currCursorX - 1
+            currCursorX = 1
+            if currXOffset < 0 then
+                currXOffset = 0
+            end
+        end
+    end
+    drawFile(true)
+end)
+registerAction("<C-f>", function()
+    resetLastSearch()
+    if oldx ~= nil then
+        currCursorX = oldx - currXOffset
+    else
+        oldx = currCursorX + currXOffset
+    end
+    local multiplier = hig - 3
+    if multiplier < 1 then
+        multiplier = 1
+    end
+    local amount = multiplier * repeatCount1 + 2
+    currFileOffset = currFileOffset + amount
+    if currCursorY + currFileOffset > #filelines then
+        currCursorY = #filelines - currFileOffset
+        if currCursorY < 1 then
+            currFileOffset = currFileOffset + currCursorY - 1
+            currCursorY = 1
+            if currFileOffset < 0 then
+                currFileOffset = 0
+            end
+        end
+    end
+    local line = filelines[currCursorY + currFileOffset]
+    if line and #line < currCursorX + currXOffset then
+        currCursorX = #line - currXOffset
+        if currCursorX < 1 then
+            currXOffset = currXOffset + currCursorX - 1
+            currCursorX = 1
+            if currXOffset < 0 then
+                currXOffset = 0
+            end
+        end
+    end
+    drawFile(true)
+end)
 
 while running == true do
     local cons = actionsTrie:consumer()
