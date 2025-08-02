@@ -3025,6 +3025,9 @@ registerAction("dd", function() resetLastSearch()
     for i = 1, count, 1 do
         table.remove(filelines, currCursorY + currFileOffset)
     end
+    if #filelines < 1 then
+        filelines[1] = ""
+    end
     fileContents[currfile]["unsavedchanges"] = true
     afterDelete()
 end)
