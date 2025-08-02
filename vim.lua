@@ -2788,14 +2788,13 @@ registerAction("A", function()
             moveCursorRight(0)
             insertMode()
         end)
-registerAction("Z", function()
-            local c = pullTypeaheadChar()
-            if c == "Q" then
+registerAction("ZQ", function()
                 setcolors(colors.black, colors.white)
                 clear()
                 setpos(1, 1)
                 running = false
-            elseif c == "Z" then
+            end)
+registerAction("ZZ", function()
                 if filename == "" then
                     err("No file name")
                 else
@@ -2810,30 +2809,25 @@ registerAction("Z", function()
                     setpos(1, 1)
                     running = false
                 end
-            end
-        end)
-registerAction("y", function()
-            local c = pullTypeaheadChar()
-            if c == "y" then
+            end)
+registerAction("yy", function()
                 copybuffer = filelines[currCursorY + currFileOffset]
                 copytype = "line"
-            elseif c == "w" then
+            end)
+registerAction("yw", function()
                 local word,beg,ed = str.wordOfPos(filelines[currCursorY + currFileOffset], currCursorX + currXOffset)
                 copybuffer = word
                 if ed ~= #filelines[currCursorY + currFileOffset] then
                     copybuffer = copybuffer .. " "
                 end
                 copytype = "text"
-            elseif c == "i" then
-                local ch = pullTypeaheadChar()
-                if ch == "w" then
+            end)
+registerAction("yiw", function()
                     local word,beg,ed = str.wordOfPos(filelines[currCursorY + currFileOffset], currCursorX + currXOffset)
                     copybuffer = word
                     copytype = "text"
-                end
-            elseif c == "a" then
-                local ch = pullTypeaheadChar()
-                if ch == "w" then
+                end)
+registerAction("yaw", function()
                     local word,beg,ed = str.wordOfPos(filelines[currCursorY + currFileOffset], currCursorX + currXOffset)
                     copybuffer = word
                     if ed ~= #filelines[currCursorY + currFileOffset] then
@@ -2842,12 +2836,11 @@ registerAction("y", function()
                         copybuffer = " " .. copybuffer
                     end
                     copytype = "text"
-                end
-            elseif c == "$" then
+                end)
+registerAction("y$", function()
                 copybuffer = string.sub(filelines[currCursorY + currFileOffset], currCursorX + currXOffset, #filelines[currCursorY + currFileOffset])
                 copytype = "text"
-            end
-        end)
+            end)
 registerAction("x", function()
             copybuffer = string.sub(filelines[currCursorY + currFileOffset], currCursorX + currXOffset, currCursorX + currXOffset)
             copytype = "text"
@@ -2858,16 +2851,18 @@ registerAction("x", function()
                 fileContents[currfile]["unsavedchanges"] = true
             end
         end)
-registerAction("d", function()
+local function resetLastSearch()
             lastSearchPos = nil
             lastSearchLine = nil
-            local c = pullTypeaheadChar()
-            if c == "d" then
+        end
+local afterDelete
+registerAction("dd", function() resetLastSearch()
                 copybuffer = filelines[currCursorY + currFileOffset]
                 copytype = "line"
                 table.remove(filelines, currCursorY + currFileOffset)
                 fileContents[currfile]["unsavedchanges"] = true
-            elseif c == "w" then
+            afterDelete() end)
+registerAction("dw", function() resetLastSearch()
                 local word,beg,ed = str.wordOfPos(filelines[currCursorY + currFileOffset], currCursorX + currXOffset)
                 copybuffer = word
                 if ed ~= #filelines[currCursorY + currFileOffset] then
@@ -2880,20 +2875,17 @@ registerAction("d", function()
                 currCursorX = beg - 1
                 filelines[currCursorY + currFileOffset] = string.sub(filelines[currCursorY + currFileOffset], 1, beg - 1) .. string.sub(filelines[currCursorY + currFileOffset], ed + 1, #filelines[currCursorY + currFileOffset])
                 fileContents[currfile]["unsavedchanges"] = true
-            elseif c == "i" then
-                local ch = pullTypeaheadChar()
+            afterDelete() end)
+registerAction("diw", function() resetLastSearch() local word, beg, ed
                 local word,beg,ed
-                if ch == "w" then
                     word,beg,ed = str.wordOfPos(filelines[currCursorY + currFileOffset], currCursorX + currXOffset)
                     copybuffer = word
                     copytype = "text"
                     filelines[currCursorY + currFileOffset] = string.sub(filelines[currCursorY + currFileOffset], 1, beg - 1) .. string.sub(filelines[currCursorY + currFileOffset], ed + 1, #filelines[currCursorY + currFileOffset])
                     fileContents[currfile]["unsavedchanges"] = true
                     currCursorX = beg - 1
-                end
-            elseif c == "a" then
-                local ch = pullTypeaheadChar()
-                if ch == "w" then
+                afterDelete() end)
+registerAction("daw", function() resetLastSearch()
                     local word,beg,ed = str.wordOfPos(filelines[currCursorY + currFileOffset], currCursorX + currXOffset)
                     copybuffer = word
                     if ed ~= #filelines[currCursorY + currFileOffset] then
@@ -2907,13 +2899,14 @@ registerAction("d", function()
                     currCursorX = beg - 1
                     filelines[currCursorY + currFileOffset] = string.sub(filelines[currCursorY + currFileOffset], 1, beg - 1) .. string.sub(filelines[currCursorY + currFileOffset], ed + 1, #filelines[currCursorY + currFileOffset])
                     fileContents[currfile]["unsavedchanges"] = true
-                end
-            elseif c == "$" then
+                afterDelete() end)
+registerAction("d$", function() resetLastSearch()
                 copybuffer = string.sub(filelines[currCursorY + currFileOffset], currCursorX + currXOffset, #filelines[currCursorY + currFileOffset])
                 copytype = "text"
                 filelines[currCursorY + currFileOffset] = string.sub(filelines[currCursorY + currFileOffset], 1, currCursorX + currXOffset - 1)
                 fileContents[currfile]["unsavedchanges"] = true
-            end
+            afterDelete() end)
+function afterDelete()
             while currCursorY + currFileOffset > #filelines do
                 currCursorY = currCursorY - 1
                 if currCursorY < 1 then
@@ -2934,7 +2927,7 @@ registerAction("d", function()
             end
             recalcMLCs()
             drawFile(true)
-        end)
+        end
 registerAction("D", function()
             lastSearchPos = nil
             lastSearchLine = nil
@@ -3260,23 +3253,23 @@ registerActionMulti({{"1", "2", "3", "4", "5", "6", "7", "8", "9"}}, function(ls
             end
         end
     end)
-registerAction("g", function()
-            lastSearchPos = nil
-            lastSearchLine = nil
-            local c = pullTypeaheadChar()
-            if c == "J" then
+registerAction("gJ", function() resetLastSearch()
                 filelines[currCursorY + currFileOffset] = filelines[currCursorY + currFileOffset] .. filelines[currCursorY + currFileOffset + 1]
                 table.remove(filelines, currCursorY + currFileOffset + 1)
                 recalcMLCs()
                 drawFile(true)
                 fileContents[currfile]["unsavedchanges"] = true
-            elseif c == "g" then
+            end)
+registerAction("gg", function() resetLastSearch()
                 currCursorY = 1
                 currFileOffset = 0
                 currCursorX = 1
                 currXOffset = 0
                 drawFile()
-            elseif c == "e" or c == "E" then
+            end)
+registerActionMulti({{"g"}, {"e", "E"}}, function(lst)
+    local c = lst[2]
+    return (function() resetLastSearch()
                 local begs = str.wordEnds(filelines[currCursorY + currFileOffset], not string.match(c, "%u"))
                 if currCursorX + currXOffset > begs[1] then
                     currCursorX = currCursorX - 1
@@ -3289,7 +3282,9 @@ registerAction("g", function()
                     end
                     drawFile()
                 end
-            elseif c == "_" then
+            end)
+        end)
+registerAction("g_", function() resetLastSearch()
                 currCursorX = #filelines[currCursorY + currFileOffset]
                 currXOffset = 0
                 local i = currCursorX
@@ -3309,7 +3304,8 @@ registerAction("g", function()
                     end
                 end
                 drawFile()
-            elseif c == "t" then
+            end)
+registerAction("gt", function() resetLastSearch()
                 if #fileContents > 1 then
                     if currfile ~= #fileContents then
                         fileContents[currfile] = filelines
@@ -3342,7 +3338,8 @@ registerAction("g", function()
                     end
                     filename = openfiles[currfile]
                 end
-            elseif c == "T" then
+            end)
+registerAction("gT", function() resetLastSearch()
                 if #fileContents > 1 then
                     if currfile ~= 1 then
                         fileContents[currfile] = filelines
@@ -3375,8 +3372,7 @@ registerAction("g", function()
                     end
                     filename = openfiles[currfile]
                 end
-            end
-        end)
+            end)
 registerAction("G", function()
             lastSearchPos = nil
             lastSearchLine = nil
@@ -3596,11 +3592,7 @@ registerActionMulti({{"F", "T"}}, function(lst)
             end
         end)
     end)
-registerAction("c", function()
-            lastSearchPos = nil
-            lastSearchLine = nil
-            local c = pullTypeaheadChar()
-            if c == "c" then
+registerAction("cc", function() resetLastSearch()
                 filelines[currCursorY + currFileOffset] = ""
                 currCursorX = 1
                 currXOffset = 0
@@ -3608,15 +3600,15 @@ registerAction("c", function()
                 drawFile()
                 fileContents[currfile]["unsavedchanges"] = true
                 insertMode()
-            elseif c == "$" then
+            end)
+registerAction("c$", function() resetLastSearch()
                 filelines[currCursorY + currFileOffset] = string.sub(filelines[currCursorY + currFileOffset], 1, currCursorX + currXOffset - 1)
                 recalcMLCs()
                 drawFile()
                 fileContents[currfile]["unsavedchanges"] = true
                 insertMode()
-            elseif c == "i" then
-                local ch = pullTypeaheadChar()
-                if ch == "w" then
+            end)
+registerAction("ciw", function() resetLastSearch()
                     local word,beg,ed = str.wordOfPos(filelines[currCursorY + currFileOffset], currCursorX + currXOffset)
                     filelines[currCursorY + currFileOffset] = string.sub(filelines[currCursorY + currFileOffset], 1, beg - 1) .. string.sub(filelines[currCursorY + currFileOffset], ed + 1, #filelines[currCursorY + currFileOffset])
                     currCursorX = beg
@@ -3629,8 +3621,9 @@ registerAction("c", function()
                     drawFile()
                     fileContents[currfile]["unsavedchanges"] = true
                     insertMode()
-                end
-            elseif c == "w" or c == "e" then
+                end)
+registerActionMulti({{"cw", "ce"}}, function(_)
+    return function() resetLastSearch()
                 local word, beg, ed = str.wordOfPos(filelines[currCursorY + currFileOffset], currCursorX + currXOffset)
                 filelines[currCursorY + currFileOffset] = string.sub(filelines[currCursorY + currFileOffset], 1, currCursorX + currXOffset - 1).. string.sub(filelines[currCursorY + currFileOffset], ed + 1, #filelines[currCursorY + currFileOffset])
                 recalcMLCs()
