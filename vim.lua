@@ -3773,6 +3773,22 @@ end)
 registerAction("<scrollwheeldown>", function()
     scrollWindowY(repeatCount1, false)
 end)
+registerAction("<pageup>", function()
+    local multiplier = hig - 3
+    if multiplier < 1 then
+        multiplier = 1
+    end
+    local amount = multiplier * repeatCount1 + 2
+    scrollWindowY(-amount, false)
+end)
+registerAction("<pagedown>", function()
+    local multiplier = hig - 3
+    if multiplier < 1 then
+        multiplier = 1
+    end
+    local amount = multiplier * repeatCount1 + 2
+    scrollWindowY(amount, false)
+end)
 
 while running == true do
     local cons = actionsTrie:consumer()
