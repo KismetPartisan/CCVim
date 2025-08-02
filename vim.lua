@@ -3761,6 +3761,18 @@ registerAction("<C-f>", function()
     local amount = multiplier * repeatCount1 + 2
     scrollWindowY(amount, false)
 end)
+registerAction("<C-y>", function()
+    scrollWindowY(-repeatCount1, false)
+end)
+registerAction("<C-e>", function()
+    scrollWindowY(repeatCount1, false)
+end)
+registerAction("<scrollwheelup>", function()
+    scrollWindowY(-repeatCount1, false)
+end)
+registerAction("<scrollwheeldown>", function()
+    scrollWindowY(repeatCount1, false)
+end)
 
 while running == true do
     local cons = actionsTrie:consumer()
