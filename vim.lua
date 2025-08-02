@@ -2960,7 +2960,7 @@ registerAction("ZZ", function()
                 end
             end)
 registerAction("yy", function()
-    local count = #filelines - currCursorY - currFileOffset
+    local count = #filelines - currCursorY - currFileOffset + 1
     if count > repeatCount1 then
         count = repeatCount1
     end
@@ -3013,7 +3013,7 @@ function resetLastSearch()
         end
 local afterDelete
 registerAction("dd", function() resetLastSearch()
-    local count = #filelines - currCursorY - currFileOffset
+    local count = #filelines - currCursorY - currFileOffset + 1
     if count > repeatCount1 then
         count = repeatCount1
     end
