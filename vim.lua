@@ -3819,6 +3819,21 @@ registerAction("<pagedown>", function()
     scrollWindowY(amount, false)
 end)
 
+registerAction("<leftmouse>", function()
+    resetLastSearch()
+    currCursorX = inputProperties.mouseX - lineoffset
+    currCursorY = inputProperties.mouseY
+    if currCursorY + currFileOffset > #filelines then
+        currCursorY = #filelines - currFileOffset
+    end
+    local line = filelines[currCursorY + currFileOffset]
+    oldx = currCursorX + currXOffset
+    if line and #line < currCursorX + currXOffset then
+        currCursorX = #line - currXOffset
+    end
+    redrawTerm()
+end)
+
 while running == true do
     local cons = actionsTrie:consumer()
     local i = 0
