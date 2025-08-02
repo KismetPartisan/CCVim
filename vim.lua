@@ -926,6 +926,58 @@ local function moveCursorDown()
     end
 end
 
+local function scrollWindowY(amount, currSOL)
+    resetLastSearch()
+    if not currSOL then
+        if oldx ~= nil then
+            currCursorX = oldx - currXOffset
+        else
+            oldx = currCursorX + currXOffset
+        end
+    end
+    if amount == 0 then
+        return
+    end
+    currFileOffset = currFileOffset + amount
+    if amount < 0 then
+        if currFileOffset < 0 then
+            currCursorY = currCursorY + currFileOffset
+            currFileOffset = 0
+            if currCursorY < 1 then
+                currCursorY = 1
+            end
+        end
+    else
+        if currCursorY + currFileOffset > #filelines then
+            currCursorY = #filelines - currFileOffset
+            if currCursorY < 1 then
+                currFileOffset = currFileOffset + currCursorY - 1
+                currCursorY = 1
+                if currFileOffset < 0 then
+                    currFileOffset = 0
+                end
+            end
+        end
+    end
+    if currSOL then
+        currCursorX = 1
+        currXOffset = 0
+    else
+        local line = filelines[currCursorY + currFileOffset]
+        if line and #line < currCursorX + currXOffset then
+            currCursorX = #line - currXOffset
+            if currCursorX < 1 then
+                currXOffset = currXOffset + currCursorX - 1
+                currCursorX = 1
+                if currXOffset < 0 then
+                    currXOffset = 0
+                end
+            end
+        end
+    end
+    drawFile(true)
+end
+
 --Recalculate where multi-line comments are, based on position in file
 local function recalcMLCs(force, offsetby)
     if not fileContents[currfile] then
@@ -3682,110 +3734,32 @@ registerAction("<up>", moveCursorUp)
 registerAction("<down>", moveCursorDown)
 
 registerAction("<C-u>", function()
-    resetLastSearch()
     if repeatCount0 > 0 then
         scrollOption = repeatCount0
     end
-    currFileOffset = currFileOffset - scrollOption
-    currCursorX = 1
-    currXOffset = 0
-    if currFileOffset < 0 then
-        currCursorY = currCursorY + currFileOffset
-        currFileOffset = 0
-        if currCursorY < 1 then
-            currCursorY = 1
-        end
-    end
-    drawFile(true)
+    scrollWindowY(-scrollOption, true)
 end)
 registerAction("<C-d>", function()
-    resetLastSearch()
     if repeatCount0 > 0 then
         scrollOption = repeatCount0
     end
-    currFileOffset = currFileOffset + scrollOption
-    currCursorX = 1
-    currXOffset = 0
-    if currCursorY + currFileOffset > #filelines then
-        currCursorY = #filelines - currFileOffset
-        if currCursorY < 1 then
-            currFileOffset = currFileOffset + currCursorY - 1
-            currCursorY = 1
-            if currFileOffset < 0 then
-                currFileOffset = 0
-            end
-        end
-    end
-    drawFile(true)
+    scrollWindowY(scrollOption, true)
 end)
 registerAction("<C-b>", function()
-    resetLastSearch()
-    if oldx ~= nil then
-        currCursorX = oldx - currXOffset
-    else
-        oldx = currCursorX + currXOffset
-    end
     local multiplier = hig - 3
     if multiplier < 1 then
         multiplier = 1
     end
     local amount = multiplier * repeatCount1 + 2
-    currFileOffset = currFileOffset - amount
-    if currFileOffset < 0 then
-        currCursorY = currCursorY + currFileOffset
-        currFileOffset = 0
-        if currCursorY < 1 then
-            currCursorY = 1
-        end
-    end
-    local line = filelines[currCursorY + currFileOffset]
-    if line and #line < currCursorX + currXOffset then
-        currCursorX = #line - currXOffset
-        if currCursorX < 1 then
-            currXOffset = currXOffset + currCursorX - 1
-            currCursorX = 1
-            if currXOffset < 0 then
-                currXOffset = 0
-            end
-        end
-    end
-    drawFile(true)
+    scrollWindowY(-amount, false)
 end)
 registerAction("<C-f>", function()
-    resetLastSearch()
-    if oldx ~= nil then
-        currCursorX = oldx - currXOffset
-    else
-        oldx = currCursorX + currXOffset
-    end
     local multiplier = hig - 3
     if multiplier < 1 then
         multiplier = 1
     end
     local amount = multiplier * repeatCount1 + 2
-    currFileOffset = currFileOffset + amount
-    if currCursorY + currFileOffset > #filelines then
-        currCursorY = #filelines - currFileOffset
-        if currCursorY < 1 then
-            currFileOffset = currFileOffset + currCursorY - 1
-            currCursorY = 1
-            if currFileOffset < 0 then
-                currFileOffset = 0
-            end
-        end
-    end
-    local line = filelines[currCursorY + currFileOffset]
-    if line and #line < currCursorX + currXOffset then
-        currCursorX = #line - currXOffset
-        if currCursorX < 1 then
-            currXOffset = currXOffset + currCursorX - 1
-            currCursorX = 1
-            if currXOffset < 0 then
-                currXOffset = 0
-            end
-        end
-    end
-    drawFile(true)
+    scrollWindowY(amount, false)
 end)
 
 while running == true do
