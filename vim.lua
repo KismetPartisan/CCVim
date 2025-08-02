@@ -76,6 +76,9 @@ local tab = require("/vim/lib/tab")
 local argv = require("/vim/lib/args")
 local str = require("/vim/lib/str")
 local fil = require("/vim/lib/fil")
+local keyseq = require("/vim/lib/keyseq")
+local Trie = require("/vim/lib/trie")
+local itertools = require("/vim/lib/itertools")
 local monitor
 local decargs = argv.pull(args, validArgs, unimplementedArgs) --DecodedArguments
 local openfiles = {}
@@ -115,6 +118,7 @@ local typeahead = {}  -- String keys and pseudokeys
 local typeaheadUpdates = {}  -- Mouse position updates
 local activeModifiers = {}
 local prefixedModifiers = {}
+local actionsTrie = Trie.new()
 local keyNames = {
     [keys.backspace] = "bs",
     [keys.enter] = "cr",
@@ -167,8 +171,10 @@ local keyNames = {
     [keys.underscore] = "_",
 }
 local builtinKeyCharacters = {
+    lt = "<",
     space = " ",
     backslash = "\\",
+    bar = "|",
     kmultiply = "*",
     kplus = "+",
     kminus = "-",
@@ -195,11 +201,13 @@ local modifierNames = {
     [keys.leftShift] = "S",
     [keys.rightShift] = "S",
 }
+local modifierOrder = {"C", "A", "S"}
 local keyNormalisation = {
     ["<"] = "lt",
     -- [">"] = "gt",
     [" "] = "space",
     ["\\"] = "backslash",
+    ["|"] = "bar",
 }
 local mouseClickNames = {
     [1] = "leftmouse",
@@ -244,6 +252,17 @@ local function getSelfInsert(name)
         return ch
     end
     return "<" .. name .. ">"
+end
+
+local function registerAction(seq, cb)
+    local key = keyseq.parseKeySequence(seq, keyNormalisation, modifierOrder)
+    actionsTrie:put(key, cb)
+end
+
+local function registerActionMulti(components, getCb)
+    for _, lst in itertools.product(components) do
+        registerAction(table.concat(lst), getCb(lst))
+    end
 end
 
 local function resetSize()
@@ -313,7 +332,7 @@ local function insertTypeahead(charname, ...)
     local kwargs = ... or {}
     local update = kwargs.update or {}
     local index = kwargs.index or #typeahead + 1
-    charname = keyNormalisation[charname:lower()] or charname  -- TODO: operate on the last dash-separated component
+    charname = keyseq.normalizeKey(charname, keyNormalisation, modifierOrder)
     table.insert(typeahead, index, charname)
     table.insert(typeaheadUpdates, index, update)
 end
@@ -323,7 +342,6 @@ local handleNonInputEvent  -- implemented after dependencies are declared
 local function waitForEvents()
     local e, s, v2, v3 = os.pullEvent()
     if e == "char" then
-        s = keyNormalisation[s:lower()] or s
         local mods = getLatestModifiers(true)
         if mods.S then
             -- Do not add shift, because it should already be consumed by the key to char conversion
@@ -376,7 +394,6 @@ local function waitForEvents()
         if mobile or translatedKey == nil then
             translatedKey = "tab"
         else
-            translatedKey = keyNormalisation[translatedKey:lower()] or translatedKey
             if mods.S then
                 translatedKey = "S-" .. translatedKey
             end
@@ -411,6 +428,7 @@ local function pullTypeahead()
         waitForEvents()
         key = table.remove(typeahead, 1)
     end
+    table.remove(typeaheadUpdates, 1)
     return key
 end
 
@@ -1975,12 +1993,7 @@ else
     end
 end
 
-while running == true do
-    local key = pullTypeaheadWRMP()
-    resetSize()
-    if isCharacterKey(key) then
-        local var1 = getSelfInsert(key)
-        if var1 == ":" then
+registerAction(":", function()
             clearScreenLine(hig)
             local cmd = pullCommand(":", false)
             local cmdtab = str.split(cmd, " ")
@@ -2681,31 +2694,41 @@ while running == true do
             elseif cmdtab[1] ~= "" then
                 err("Not an editor command or unimplemented: "..cmdtab[1])
             end
-        elseif var1 == "i"then
+        end)
+registerAction("i", function()
             insertMode()
-        elseif var1 == "I" then
+        end)
+registerAction("I", function()
             currXOffset = 0
             currCursorX = 1
             drawFile(true)
             insertMode()
-        elseif var1 == "h" then
+        end)
+registerAction("h", function()
             moveCursorLeft()
-        elseif var1 == "j" then
+        end)
+registerAction("j", function()
             moveCursorDown()
-        elseif var1 == "k" then
+        end)
+registerAction("k", function()
             moveCursorUp()
-        elseif var1 == "l" then
+        end)
+registerAction("l", function()
             moveCursorRight(1)
-        elseif var1 == "H" then
+        end)
+registerAction("H", function()
             currCursorY = 1
             drawFile(true)
-        elseif var1 == "M" then
+        end)
+registerAction("M", function()
             currCursorY = math.floor((hig - 1) / 2)
             drawFile(true)
-        elseif var1 == "L" then
+        end)
+registerAction("L", function()
             currCursorY = hig - 1
             drawFile(true)
-        elseif var1 == "r" then
+        end)
+registerAction("r", function()
             local chr = pullTypeaheadChar()
             filelines[currCursorY + currFileOffset] = string.sub(filelines[currCursorY + currFileOffset], 1, currCursorX + currXOffset - 1) .. chr .. string.sub(filelines[currCursorY + currFileOffset], currCursorX + currXOffset + 1, #(filelines[currCursorY + currFileOffset]))
             recalcMLCs()
@@ -2713,7 +2736,8 @@ while running == true do
             if fileContents[currfile] then
                 fileContents[currfile]["unsavedchanges"] = true
             end
-        elseif var1 == "J" then
+        end)
+registerAction("J", function()
             if filelines[currCursorY + currFileOffset] and filelines[currCursorY + currFileOffset + 1] then
                 filelines[currCursorY + currFileOffset] = filelines[currCursorY + currFileOffset] .. " " .. filelines[currCursorY + currFileOffset + 1]
                 table.remove(filelines, currCursorY + currFileOffset + 1)
@@ -2721,7 +2745,8 @@ while running == true do
                 drawFile(true)
                 fileContents[currfile]["unsavedchanges"] = true
             end
-        elseif var1 == "o" then
+        end)
+registerAction("o", function()
             lastSearchPos = nil
             lastSearchLine = nil
             table.insert(filelines, currCursorY + currFileOffset + 1, "")
@@ -2734,7 +2759,8 @@ while running == true do
             if fileContents[currfile] then
                 fileContents[currfile]["unsavedchanges"] = true
             end
-        elseif var1 == "O" then
+        end)
+registerAction("O", function()
             lastSearchPos = nil
             lastSearchLine = nil
             table.insert(filelines, currCursorY + currFileOffset, "")
@@ -2744,10 +2770,12 @@ while running == true do
             drawFile(true)
             insertMode()
             fileContents[currfile]["unsavedchanges"] = true
-        elseif var1 == "a" then
+        end)
+registerAction("a", function()
             moveCursorRight(0)
             insertMode()
-        elseif var1 == "A" then
+        end)
+registerAction("A", function()
             lastSearchPos = nil
             lastSearchLine = nil
             currCursorX = #filelines[currCursorY + currFileOffset]
@@ -2759,7 +2787,8 @@ while running == true do
             drawFile()
             moveCursorRight(0)
             insertMode()
-        elseif var1 == "Z" then
+        end)
+registerAction("Z", function()
             local c = pullTypeaheadChar()
             if c == "Q" then
                 setcolors(colors.black, colors.white)
@@ -2782,7 +2811,8 @@ while running == true do
                     running = false
                 end
             end
-        elseif var1 == "y" then
+        end)
+registerAction("y", function()
             local c = pullTypeaheadChar()
             if c == "y" then
                 copybuffer = filelines[currCursorY + currFileOffset]
@@ -2817,7 +2847,8 @@ while running == true do
                 copybuffer = string.sub(filelines[currCursorY + currFileOffset], currCursorX + currXOffset, #filelines[currCursorY + currFileOffset])
                 copytype = "text"
             end
-        elseif var1 == "x" then
+        end)
+registerAction("x", function()
             copybuffer = string.sub(filelines[currCursorY + currFileOffset], currCursorX + currXOffset, currCursorX + currXOffset)
             copytype = "text"
             filelines[currCursorY + currFileOffset] = string.sub(filelines[currCursorY + currFileOffset], 1, currCursorX + currXOffset - 1) .. string.sub(filelines[currCursorY + currFileOffset], currCursorX + currXOffset + 1, #filelines[currCursorY + currFileOffset])
@@ -2826,7 +2857,8 @@ while running == true do
             if fileContents[currfile] then
                 fileContents[currfile]["unsavedchanges"] = true
             end
-        elseif var1 == "d" then
+        end)
+registerAction("d", function()
             lastSearchPos = nil
             lastSearchLine = nil
             local c = pullTypeaheadChar()
@@ -2902,7 +2934,8 @@ while running == true do
             end
             recalcMLCs()
             drawFile(true)
-        elseif var1 == "D" then
+        end)
+registerAction("D", function()
             lastSearchPos = nil
             lastSearchLine = nil
             copybuffer = string.sub(filelines[currCursorY + currFileOffset], currCursorX + currXOffset, #filelines[currCursorY + currFileOffset])
@@ -2911,7 +2944,8 @@ while running == true do
             drawFile()
             recalcMLCs()
             fileContents[currfile]["unsavedchanges"] = true
-        elseif var1 == "p" then
+        end)
+registerAction("p", function()
             lastSearchPos = nil
             lastSearchLine = nil
             if copytype == "line" then
@@ -2933,7 +2967,8 @@ while running == true do
             if fileContents[currfile] then
                 fileContents[currfile]["unsavedchanges"] = true
             end
-        elseif var1 == "P" then
+        end)
+registerAction("P", function()
             lastSearchPos = nil
             lastSearchLine = nil
             if copytype == "line" then
@@ -2958,7 +2993,8 @@ while running == true do
             recalcMLCs(true)
             drawFile(true)
             fileContents[currfile]["unsavedchanges"] = true
-        elseif var1 == "$" then
+        end)
+registerAction("$", function()
             lastSearchPos = nil
             lastSearchLine = nil
             currCursorX = #filelines[currCursorY + currFileOffset]
@@ -2968,13 +3004,17 @@ while running == true do
                 currXOffset = currXOffset + 1
             end
             drawFile()
-        elseif var1 == "0" then --must be before the number things so 0 isn't captured too
+        end)
+registerAction("0", function()
             lastSearchPos = nil
             lastSearchLine = nil
             currCursorX = 1
             currXOffset = 0
             drawFile()
-        elseif tonumber(var1) ~= nil then
+        end)
+registerActionMulti({{"1", "2", "3", "4", "5", "6", "7", "8", "9"}}, function(lst)
+    local var1 = lst[1]
+    return function()
             lastSearchPos = nil
             lastSearchLine = nil
             local num = var1 --num IS A STRING! Convert it to a number with tonumber() before use!
@@ -3218,7 +3258,9 @@ while running == true do
                     end
                 end
             end
-        elseif var1 == "g" then
+        end
+    end)
+registerAction("g", function()
             lastSearchPos = nil
             lastSearchLine = nil
             local c = pullTypeaheadChar()
@@ -3334,7 +3376,8 @@ while running == true do
                     filename = openfiles[currfile]
                 end
             end
-        elseif var1 == "G" then
+        end)
+registerAction("G", function()
             lastSearchPos = nil
             lastSearchLine = nil
             currFileOffset = 0
@@ -3346,7 +3389,10 @@ while running == true do
             currCursorX = 1
             currXOffset = 0
             drawFile()
-        elseif var1 == "w" or var1 == "W" then
+        end)
+registerActionMulti({{"w", "W"}}, function(lst)
+    local var1 = lst[1]
+    return (function ()
             lastSearchPos = nil
             lastSearchLine = nil
             local begs = str.wordBeginnings(filelines[currCursorY + currFileOffset], not string.match(var1, "%u"))
@@ -3364,7 +3410,11 @@ while running == true do
                     drawFile()
                 end
             end
-        elseif var1 == "e" or var1 == "E" then
+        end)
+    end)
+registerActionMulti({{"e", "E"}}, function(lst)
+    local var1 = lst[1]
+    return (function ()
             lastSearchPos = nil
             lastSearchLine = nil
             local begs = str.wordEnds(filelines[currCursorY + currFileOffset], not string.match(var1, "%u"))
@@ -3381,7 +3431,11 @@ while running == true do
                     drawFile()
                 end
             end
-        elseif var1 == "b" or var1 == "B" then
+        end)
+    end)
+registerActionMulti({{"b", "B"}}, function(lst)
+    local var1 = lst[1]
+    return (function ()
             lastSearchPos = nil
             lastSearchLine = nil
             local begs = str.wordBeginnings(filelines[currCursorY + currFileOffset], not string.match(var1, "%u"))
@@ -3398,7 +3452,9 @@ while running == true do
                     drawFile()
                 end
             end
-        elseif var1 == "^" then
+        end)
+    end)
+registerAction("^", function()
             lastSearchPos = nil
             lastSearchLine = nil
             currCursorX = 1
@@ -3413,7 +3469,10 @@ while running == true do
                 currXOffset = currXOffset + 1
             end
             drawFile()
-        elseif var1 == "f" or var1 == "t" then
+        end)
+registerActionMulti({{"f", "t"}}, function(lst)
+    local var1 = lst[1]
+    return (function ()
             lastSearchPos = nil
             lastSearchLine = nil
             local c = pullTypeaheadChar()
@@ -3444,7 +3503,11 @@ while running == true do
                     end
                 end
             end
-        elseif var1 == "F" or var1 == "T" then
+        end)
+    end)
+registerActionMulti({{"F", "T"}}, function(lst)
+    local var1 = lst[1]
+    return (function ()
             lastSearchPos = nil
             lastSearchLine = nil
             local c = pullTypeaheadChar()
@@ -3471,7 +3534,11 @@ while running == true do
                     end
                 end
             end
-        elseif var1 == ";" or var1 == "," then
+        end)
+    end)
+registerActionMulti({{"F", "T"}}, function(lst)
+    local var1 = lst[1]
+    return (function ()
             lastSearchPos = nil
             lastSearchLine = nil
             if jumpbuffer[1] then
@@ -3527,7 +3594,9 @@ while running == true do
                     end
                 end
             end
-        elseif var1 == "c" then
+        end)
+    end)
+registerAction("c", function()
             lastSearchPos = nil
             lastSearchLine = nil
             local c = pullTypeaheadChar()
@@ -3569,13 +3638,15 @@ while running == true do
                 fileContents[currfile]["unsavedchanges"] = true
                 insertMode()
             end
-        elseif var1 == "C" then
+        end)
+registerAction("C", function()
             filelines[currCursorY + currFileOffset] = string.sub(filelines[currCursorY + currFileOffset], 1, currCursorX + currXOffset - 1)
             recalcMLCs()
             drawFile()
             fileContents[currfile]["unsavedchanges"] = true
             insertMode()
-        elseif var1 == "s" then
+        end)
+registerAction("s", function()
             filelines[currCursorY + currFileOffset] = string.sub(filelines[currCursorY + currFileOffset], 1, currCursorX + currXOffset - 1) .. string.sub(filelines[currCursorY + currFileOffset], currCursorX + currXOffset + 1, #filelines[currCursorY + currFileOffset])
             recalcMLCs()
             drawFile()
@@ -3584,7 +3655,8 @@ while running == true do
             end
             fileContents[currfile]["unsavedchanges"] = true
             insertMode()
-        elseif var1 == "S" then
+        end)
+registerAction("S", function()
             lastSearchPos = nil
             lastSearchLine = nil
             filelines[currCursorY + currFileOffset] = ""
@@ -3594,7 +3666,8 @@ while running == true do
             drawFile()
             fileContents[currfile]["unsavedchanges"] = true
             insertMode()
-        elseif var1 == "%" then
+        end)
+registerAction("%", function()
             lastSearchPos = nil
             lastSearchLine = nil
             local startpos = {currCursorX, currXOffset, currCursorY, currFileOffset}
@@ -3662,30 +3735,72 @@ while running == true do
                 currCursorY = startpos[3]
                 currFileOffset = startpos[4]
             end
-        elseif var1 == "/" then
+        end)
+registerAction("/", function()
             search("forward")
-        elseif var1 == "?" then
+        end)
+registerAction("?", function()
             search("backward")
-        elseif var1 == "n" then
+        end)
+registerAction("n", function()
             search("forward", true)
-        elseif var1 == "N" then
+        end)
+registerAction("N", function()
             search("backward", true)
-        elseif var1 == "*" then
+        end)
+registerAction("*", function()
             local currword = str.wordOfPos(filelines[currCursorY + currFileOffset], currCursorX + currXOffset, true)
             search("forward", false, currword)
-        elseif var1 == "#" then
+        end)
+registerAction("#", function()
             local currword = str.wordOfPos(filelines[currCursorY + currFileOffset], currCursorX + currXOffset, true)
             search("backward", false, currword)
+        end)
+registerAction("<left>", moveCursorLeft)
+registerAction("<right>", function() moveCursorRight(1) end)
+registerAction("<up>", moveCursorUp)
+registerAction("<down>", moveCursorDown)
+
+while running == true do
+    local cons = actionsTrie:consumer()
+    local i = 0
+    local prefix = {}
+    while true do
+        i = i + 1
+        while #typeahead < i do
+            waitForEvents()
         end
-    else
-        if key == "left" then
-            moveCursorLeft()
-        elseif key == "right" then
-            moveCursorRight(1)
-        elseif key == "up" then
-            moveCursorUp()
-        elseif key == "down" then
-            moveCursorDown()
+        local key = typeahead[i]
+        if key == "C-c" then
+            -- Clear typeahead
+            while #typeahead > 0 do
+                typeaheadUpdates[#typeahead] = nil
+                typeahead[#typeahead] = nil
+            end
+            cons = nil
+            break
+        end
+        if i == 1 then
+            key = remappings[key] or key
+        end
+        prefix[i] = key
+        if not cons:next(key) then
+            break
+        end
+        if not cons:hasNext() then
+            break
+        end
+    end
+    if cons ~= nil then
+        local len, action = cons:getDeepest()
+        if len > 0 then
+            for _ = 1, len do
+                pullTypeahead()
+            end
+            action()
+        else
+            -- Drop one key
+            pullTypeahead()
         end
     end
 end
