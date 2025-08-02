@@ -439,6 +439,24 @@ local function pullTypeaheadWRMP()
     return key
 end
 
+local function peekTypeahead(idx)
+    idx = idx or 1
+    while #typeahead < idx do
+        waitForEvents()
+    end
+    return typeahead[idx]
+end
+
+local function peekTypeaheadWRMP(idx)
+    local key = peekTypeahead(idx)
+    key = remappings[key] or key
+    return key
+end
+
+local function typeaheadLength()
+    return #typeahead
+end
+
 local function pullCommand(input, numeric, len)
     if input == nil then
         input = ''
@@ -3760,21 +3778,19 @@ while running == true do
     local prefix = {}
     while true do
         i = i + 1
-        while #typeahead < i do
-            waitForEvents()
+        local key
+        if i == 1 then
+            key = peekTypeaheadWRMP(i)
+        else
+            key = peekTypeahead(i)
         end
-        local key = typeahead[i]
         if key == "C-c" then
             -- Clear typeahead
-            while #typeahead > 0 do
-                typeaheadUpdates[#typeahead] = nil
-                typeahead[#typeahead] = nil
+            for _ = 1, i do
+                pullTypeahead()
             end
             cons = nil
             break
-        end
-        if i == 1 then
-            key = remappings[key] or key
         end
         prefix[i] = key
         if not cons:next(key) then
