@@ -137,7 +137,7 @@ local scrollOption = 10
 local modeMsg
 local typeahead = {}  -- String keys and pseudokeys
 local typeaheadUpdates = {}  -- Mouse position updates
-local inputProperties = {mouseX = 1, mouseY = 1}
+local inputProperties = {mouseX = 1, mouseY = 1, pasteData = ""}
 local activeModifiers = {}
 local prefixedModifiers = {}
 local actionsTrie = Trie.new()
@@ -230,6 +230,7 @@ local keyNormalisation = {
     [" "] = "space",
     ["\\"] = "backslash",
     ["|"] = "bar",
+    ["esc"] = "tab",
 }
 local mouseClickNames = {
     [1] = "leftmouse",
@@ -383,6 +384,22 @@ local function insertTypeahead(charname, ...)
     table.insert(typeaheadUpdates, index, update)
 end
 
+local function expandPaste(alwaysNoremap)
+    local data = inputProperties.pasteData
+    if not data then
+        return
+    end
+    local noremap = alwaysNoremap or noremapFor > 0
+    local length = 0
+    for i, ch in itertools.enumerate(data:gmatch(".")) do
+        insertTypeahead(ch, {index = i})
+        length = i
+    end
+    if noremap then
+        noremapFor = noremapFor + length
+    end
+end
+
 local handleNonInputEvent  -- implemented after dependencies are declared
 
 local function waitForEvents()
@@ -468,11 +485,15 @@ local function waitForEvents()
         end
         insertTypeahead(translatedKey, {update = {mouseX = v2, mouseY = v3}})
     elseif e == "paste" then
-        getLatestModifiers(true)  -- Drop prefix states
-        local ch
-        for ch in s:gmatch(".") do
-            insertTypeahead(ch)
+        local translatedKey = "C-v"
+        local mods = getLatestModifiers(true)
+        if mods.S then
+            translatedKey = "S-" .. translatedKey
         end
+        if mods.A then
+            translatedKey = "A-" .. translatedKey
+        end
+        insertTypeahead(translatedKey, {update = {pasteData = s}})
     else
         handleNonInputEvent(e, s, v2, v3)
     end
@@ -568,6 +589,11 @@ end
 
 local function pullCount()  -- Returns string
     local ch = peekTypeaheadWRMP(1)
+    while ch == "<C-S-v>" do
+        pullTypeahead()
+        expandPaste()
+        ch = peekTypeaheadWRMP()
+    end
     if ch:find("[^1-9]") then
         return ""
     end
@@ -575,6 +601,11 @@ local function pullCount()  -- Returns string
     local builder = {ch}
     while true do
         ch = peekTypeaheadWRMP(1)
+        while ch == "<C-S-v>" do
+            pullTypeahead()
+            expandPaste()
+            ch = peekTypeaheadWRMP()
+        end
         if ch:find("%D") then
             return table.concat(builder)
         end
@@ -644,6 +675,8 @@ local function pullCommand(input, numeric, len)
             if key == "bs" then
                 input = input:sub(1, #input - 1)
                 backspace = true
+            elseif key == "C-S-v" then
+                expandPaste()
             end
         end
     until (key == "cr") or (finish == true)
@@ -1266,6 +1299,8 @@ local function insertMode()
                 moveCursorUp()
             elseif key == "down" then
                 moveCursorDown()
+            elseif key == "C-S-v" then
+                expandPaste(true)
             elseif key == "bs" then
                 if filelines[currCursorY + currFileOffset] ~= "" and filelines[currCursorY + currFileOffset] ~= nil and currCursorX > 1 then
                     filelines[currCursorY + currFileOffset] = string.sub(filelines[currCursorY + currFileOffset], 1, currCursorX + currXOffset - 2) .. string.sub(filelines[currCursorY + currFileOffset], currCursorX + currXOffset, #(filelines[currCursorY + currFileOffset]))
@@ -1428,7 +1463,11 @@ end
 local function pullTypeaheadChar()
     local ch
     repeat
-        ch = getSelfInsert(pullTypeaheadWRMP())
+        local key = pullTypeaheadWRMP()
+        if key == "C-S-v" then
+            expandPaste()
+        end
+        ch = getSelfInsert(key)
     until #ch == 1
     return ch
 end
@@ -1889,6 +1928,8 @@ local function search(direction, research, currword, wrapSearchPos)
                         setpos(2, hig)
                         write(currSearch)
                     end
+                elseif key == "C-S-v" then
+                    expandPaste()
                 end
             end
         end
@@ -3940,6 +3981,11 @@ registerAction("<leftmouse>", function()
         currCursorX = #line - currXOffset
     end
     redrawTerm()
+end)
+
+-- By default paste content is interpreted as normal-mode keys, use mappings to change this behavior
+registerAction("<C-S-v>", function()
+    expandPaste()
 end)
 
 while running == true do

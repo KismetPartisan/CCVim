@@ -47,4 +47,17 @@ local function update(dst, src)
     collectInto(dst, pairs(src))
 end
 
-return { product = product, collect = collect, update = update }
+local function enumerate(itNext, state, ...)
+    local index = {...}
+    local i = 0
+    return function(...)
+        i = i + 1
+        index = {itNext(state, table.unpack(index))}
+        if index[1] ~= nil then
+            return i, table.unpack(index)
+        end
+        return nil
+    end, state, index
+end
+
+return { product = product, collect = collect, update = update, enumerate = enumerate }
