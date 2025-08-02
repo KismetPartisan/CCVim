@@ -3211,6 +3211,7 @@ registerAction("P", function()
 registerAction("$", function()
             lastSearchPos = nil
             lastSearchLine = nil
+            oldx = 999999999
             currCursorX = #filelines[currCursorY + currFileOffset]
             currXOffset = 0
             while currCursorX + lineoffset > wid do
