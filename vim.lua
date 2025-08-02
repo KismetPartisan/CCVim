@@ -325,7 +325,6 @@ local function getLatestModifiers(...)  -- Example result: {A = true, C = nil}
         if v then
             result[modifierNames[k]] = true
             if resetPrefixed then
-                activeModifiers[k] = nil
                 prefixedModifiers[k] = nil
             end
         end
