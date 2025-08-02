@@ -2914,18 +2914,18 @@ end)
 registerAction("l", function()
     resetLastSearch()
     currCursorX = currCursorX + repeatCount1
-    if filelines[currCursorY + currFileOffset] ~= nil then
-        if currCursorX + currXOffset < #filelines[currCursorY + currFileOffset] then
-            if currCursorX + currXOffset > #filelines[currCursorY + currFileOffset] then
-                currXOffset = 0
-                currCursorX = #filelines[currCursorY + currFileOffset] + 1
-            end
-            while currCursorX + lineoffset > wid do
-                currCursorX = currCursorX - 1
-                currXOffset = currXOffset + 1
-            end
-            drawFile()
+    local line = filelines[currCursorY + currFileOffset]
+    if line ~= nil then
+        if currCursorX + currXOffset > #line then
+            currXOffset = 0
+            currCursorX = #filelines[currCursorY + currFileOffset] + 1
         end
+        if currCursorX + lineoffset > wid then
+            local delta = wid - currCursorX - lineoffset
+            currCursorX = currCursorX + delta
+            currXOffset = currXOffset - delta
+        end
+        drawFile()
     end
     oldx = nil
 end)
