@@ -104,9 +104,12 @@ local coreFiles = {
     {".vimrc"},
     {".version"},
     {"args.lua", "lib/"},
-    {"file.lua", "lib/"},
+    {"fil.lua", "lib/"},
     {"str.lua", "lib/"},
     {"tab.lua", "lib/"},
+    {"itertools.lua", "lib/"},
+    {"trie.lua", "lib/"},
+    {"keyseq.lua", "lib/"},
 }
 local baseUrl = "https://raw.githubusercontent.com/Vftdan/CCVim/main/"
 
