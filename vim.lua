@@ -20,7 +20,9 @@ local args = {...}
 
 local validArgs = {
     "--version",
-    "--term"
+    "--term",  -- back-compatibility, ignored
+    "-g",
+    "--not-a-term",
 }
 
 local unimplementedArgs = {
@@ -45,7 +47,6 @@ local unimplementedArgs = {
     "-r",
     "-L",
     "-T",
-    "--not-a-term",
     "--ttyfail",
     "-u",
     "--noplugin",
@@ -247,7 +248,11 @@ local mouseClickNames = {
     [3] = "middlemouse",
 }
 
-if not tab.find(args, "--term") then
+-- Instead of defaulting to monitor without "--term",
+-- default to no monitor without "-g"
+-- Because multiple vim instances can be running at the same time,
+-- and the monitor can be often used by something else
+if tab.find(args, "-g") or tab.find(args, "--not-a-term") then
     monitor = peripheral.find("monitor")
 end
 
