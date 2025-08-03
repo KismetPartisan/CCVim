@@ -34,7 +34,7 @@ Fun fact - this README was written in the program!
 # Installation
 
 **Automatic**
-Run ```pastebin run eX0BrfjA``` on your computer.
+Run ```pastebin run Bp7Pj7Ry``` on your computer. To install the upstream version run ```pastebin run eX0BrfjA``` instead.
 
 **Manual**
 Copy ```vim.lua```, ```.version``` and the ```libs``` folder with its contents to the ```/vim/``` folder of your computer.
