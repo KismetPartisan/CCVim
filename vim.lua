@@ -141,6 +141,7 @@ local inputProperties = {mouseX = 1, mouseY = 1, pasteData = ""}
 local activeModifiers = {}
 local prefixedModifiers = {}
 local keyboards = {}
+local useTmKeyboards = false
 local actionsTrie = Trie.new()
 local keyNamesTranslation = {
     backspace = "bs",
@@ -1298,7 +1299,7 @@ function handleNonInputEvent(e, s, v2, v3)
         if modeMsg ~= nil then
             sendMsg(modeMsg)
         end
-    elseif e:find("^tm_keyboard_") then
+    elseif useTmKeyboards and e:find("^tm_keyboard_") then
         local innerEvent = e:match("^tm_keyboard_(.+)$")
         local outerActiveModifiers = activeModifiers
         local outerPrefixedModifiers = prefixedModifiers
@@ -2936,6 +2937,10 @@ registerAction(":", function()
                     ignorecase = true
                 elseif cmdtab[2] == "noignorecase" or cmdtab[2] == "noic" then
                     ignorecase = false
+                elseif cmdtab[2] == "tmkeyboard" then
+                    useTmKeyboards = true
+                elseif cmdtab[2] == "notmkeyboard" then
+                    useTmKeyboards = false
                 else
                     err("Variable " .. cmdtab[2] .. " not supported.")
                     seterror = true
