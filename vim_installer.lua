@@ -15,6 +15,7 @@ local function initialMenu()
     print("3. Add syntax to installation")
     print("4. Update CCVIM")
     print("5. Exit")
+    print("6. Add shell completion")
 end
 
 local function find(table, query)
@@ -45,6 +46,23 @@ local function toArr(filePath)
     end
 end
 
+local function backupStartup()
+    print("Looking for existing startup file...")
+    if fs.exists("startup") then
+        print("Existing startup file found. Would you like to back it up (startup.bkup) before proceeding? [y/n]")
+        local _,cha = os.pullEvent("char")
+        if cha == "y" or cha == "Y" then
+            shell.run("cp", "/startup/", "/startup.bkup/")
+            if not fs.exists("startup.bkup") then
+                error("Failed to create backup file.")
+            end
+            print("Backed up existing startup file to /startup.bkup")
+        else
+            print("Proceeding without backing up existing startup file")
+        end
+    end
+end
+
 local setPath = false
 local function addToPath()
     if fs.exists("/vim/vim.lua") then
@@ -53,20 +71,7 @@ local function addToPath()
             print("This will not work if you have moved your CCVIM installation. Proceed? [y/n]")
             local _, c = os.pullEvent("char")
             if c == "y" or c == "Y" then
-                print("Looking for existing startup file...")
-                if fs.exists("startup") then
-                    print("Existing startup file found. Would you like to back it up (startup.bkup) before proceeding? [y/n]")
-                    local _,cha = os.pullEvent("char")
-                    if cha == "y" or cha == "Y" then
-                        shell.run("cp", "/startup/", "/startup.bkup/")
-                        if not fs.exists("startup.bkup") then
-                            error("Failed to create backup file.")
-                        end
-                        print("Backed up existing startup file to /startup.bkup")
-                    else
-                        print("Proceeding without backing up existing startup file")
-                    end
-                end
+                backupStartup()
                 print("Adding path setup to startup file...")
                 local file = fs.open("startup", "a")
                 file.writeLine("shell.setPath(shell.path()..\":/vim/\")")
@@ -79,6 +84,42 @@ local function addToPath()
         end
     else
         print("No vim installation found.")
+    end
+    print("Press any key to continue...")
+    os.pullEvent("char")
+end
+
+local function addCompletion()
+    local newLine = "shell.setCompletionFunction(\"vim/vim.lua\", function(shell, index, text, previous) local result = fs.complete(text, shell.dir(), {include_files=true, include_dirs=true, include_hidden = settings.get(\"shell.autocomplete_hidden\")}) for _, o in ipairs(require(\"cc.completion\").choice(text, {\"-g\", \"--version\", \"--not-a-term\", \"--term\"}, true)) do table.insert(result, o) end return result end)"
+    local pattern = "^%s*shell%.setCompletionFunction%(%\"vim%/vim%.lua%\"%,"
+    local lines = toArr("/startup")
+    local existsSame, existsDifferent = false, false
+    for _, line in ipairs(lines) do
+        if line:find(pattern) then
+            if line:gsub("^%s*", "") == newLine then
+                existsSame = true
+            else
+                existsDifferent = true
+            end
+        end
+    end
+    if existsSame then
+        print("Already added to file.")
+    else
+        local _
+        local c = "y"
+        if existsDifferent then
+            print("A different completion function exists, you can later delete it manually. Proceed? [y/n]")
+            _, c = os.pullEvent("char")
+        end
+        if c == "y" or c == "Y" then
+            backupStartup()
+            print("Adding completion setup to startup file...")
+            local file = fs.open("startup", "a")
+            file.writeLine(newLine)
+            file.close()
+            print("Added completion setup to startup file.")
+        end
     end
     print("Press any key to continue...")
     os.pullEvent("char")
@@ -132,6 +173,11 @@ local function install()
     local _, c = os.pullEvent("char")
     if c == "y" then
         addToPath()
+    end
+    print("Do you want to add shell completion? [y/n]")
+    local _, c = os.pullEvent("char")
+    if c == "y" then
+        addCompletion()
     end
     local allExist = true
     for _, file in ipairs(coreFiles) do
@@ -306,5 +352,9 @@ while running == true do
         term.clear()
         term.setCursorPos(1, 1)
         running = false
+    elseif ch == "6" then
+        term.clear()
+        term.setCursorPos(1, 1)
+        addCompletion()
     end
 end
