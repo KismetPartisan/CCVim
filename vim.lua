@@ -3449,6 +3449,7 @@ registerAction("0", function()
             lastSearchLine = nil
             currCursorX = 1
             currXOffset = 0
+            oldx = nil
             drawFile()
         end)
 registerAction("gJ", function() resetLastSearch()
@@ -3623,6 +3624,7 @@ registerActionMulti({{"e", "E"}}, function(lst)
                         currCursorX = currCursorX - 1
                         currXOffset = currXOffset + 1
                     end
+                    oldx = currCursorX + currXOffset
                     drawFile()
                 end
             end
@@ -3657,6 +3659,7 @@ registerAction("^", function()
             lastSearchLine = nil
             currCursorX = 1
             currXOffset = 0
+            oldx = nil
             local i = currCursorX
             while string.sub(filelines[currCursorY + currFileOffset], i, i) == " " and i < #filelines[currCursorY + currFileOffset] do
                 i = i + 1
@@ -3679,6 +3682,7 @@ registerActionMulti({{"f", "t"}}, function(lst)
                 if currCursorX + currFileOffset < idx[#idx] - jumpoffset then
                     local oldcursor = currCursorX
                     currCursorX = currCursorX + (1 + jumpoffset)
+                    oldx = nil
                     while not tab.find(idx, currCursorX + currXOffset) and currCursorX + currXOffset < #filelines[currCursorY + currFileOffset] do
                         currCursorX = currCursorX + 1
                     end
@@ -3714,6 +3718,7 @@ registerActionMulti({{"F", "T"}}, function(lst)
             if #idx > 0 then
                 if currCursorX + currFileOffset > idx[1] + jumpoffset then
                     currCursorX = currCursorX - (1 + jumpoffset)
+                    oldx = nil
                     while not tab.find(idx, currCursorX + currXOffset) and currCursorX > 1 do
                         currCursorX = currCursorX - 1
                     end
