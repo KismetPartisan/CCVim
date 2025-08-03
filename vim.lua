@@ -140,6 +140,8 @@ local typeaheadUpdates = {}  -- Mouse position updates
 local inputProperties = {mouseX = 1, mouseY = 1, pasteData = ""}
 local activeModifiers = {}
 local prefixedModifiers = {}
+local keyboards = {}
+local useTmKeyboards = false
 local actionsTrie = Trie.new()
 local keyNamesTranslation = {
     backspace = "bs",
@@ -230,6 +232,7 @@ local modifierNames = {
     [keys.rightShift] = "S",
 }
 local modifierOrder = {"C", "A", "S"}
+local ignoreHold = {}  -- Modifiers that can only be prefixed
 local keyNormalisation = {
     ["<"] = "lt",
     -- [">"] = "gt",
@@ -403,10 +406,15 @@ local function expandPaste(alwaysNoremap)
     end
 end
 
+local handleOsEvent
 local handleNonInputEvent  -- implemented after dependencies are declared
 
 local function waitForEvents()
     local e, s, v2, v3 = os.pullEvent()
+    handleOsEvent(e, s, v2, v3)
+end
+
+function handleOsEvent(e, s, v2, v3)
     if e == "char" then
         local mods = getLatestModifiers(true)
         if mods.S then
@@ -440,7 +448,7 @@ local function waitForEvents()
                 insertTypeahead(translatedKey)
             end
         elseif translatedMod ~= nil then
-            if v2 and not activeModifiers[s] then
+            if (v2 and not activeModifiers[s]) or ignoreHold[s] then
                 -- If a key sends a repeat event without a start event,
                 -- it will not send key_up
                 prefixedModifiers[s] = not prefixedModifiers[s]
@@ -1291,6 +1299,18 @@ function handleNonInputEvent(e, s, v2, v3)
         if modeMsg ~= nil then
             sendMsg(modeMsg)
         end
+    elseif useTmKeyboards and e:find("^tm_keyboard_") then
+        local innerEvent = e:match("^tm_keyboard_(.+)$")
+        local outerActiveModifiers = activeModifiers
+        local outerPrefixedModifiers = prefixedModifiers
+        if not keyboards[s] then
+            keyboards[s] = {activeModifiers = {}, prefixedModifiers = {}}
+        end
+        activeModifiers = keyboards[s].activeModifiers
+        prefixedModifiers = keyboards[s].prefixedModifiers
+        handleOsEvent(innerEvent, v2, v3, nil)
+        activeModifiers = outerActiveModifiers
+        prefixedModifiers = outerPrefixedModifiers
     end
 end
 
@@ -1496,6 +1516,15 @@ if fs.exists("/vim/.vimrc") then
                 end
             elseif rctable[1] == "finish" then
                 break
+            elseif rctable[1] == "ignorehold" then
+                local i = 1
+                while i < #rctable do
+                    i = i + 1
+                    local keyCode = keys[rctable[i]]
+                    if keyCode ~= nil then
+                        ignoreHold[keyCode] = true
+                    end
+                end
             elseif rctable[1] ~= "" and rctable[1] ~= nil then
                 error("Unrecognized vimrc command " .. rctable[1] .. ". Full vimscript is not yet supported.")
             end
@@ -2908,6 +2937,10 @@ registerAction(":", function()
                     ignorecase = true
                 elseif cmdtab[2] == "noignorecase" or cmdtab[2] == "noic" then
                     ignorecase = false
+                elseif cmdtab[2] == "tmkeyboard" then
+                    useTmKeyboards = true
+                elseif cmdtab[2] == "notmkeyboard" then
+                    useTmKeyboards = false
                 else
                     err("Variable " .. cmdtab[2] .. " not supported.")
                     seterror = true
@@ -3439,6 +3472,7 @@ registerAction("0", function()
             lastSearchLine = nil
             currCursorX = 1
             currXOffset = 0
+            oldx = nil
             drawFile()
         end)
 registerAction("gJ", function() resetLastSearch()
@@ -3613,6 +3647,7 @@ registerActionMulti({{"e", "E"}}, function(lst)
                         currCursorX = currCursorX - 1
                         currXOffset = currXOffset + 1
                     end
+                    oldx = currCursorX + currXOffset
                     drawFile()
                 end
             end
@@ -3647,6 +3682,7 @@ registerAction("^", function()
             lastSearchLine = nil
             currCursorX = 1
             currXOffset = 0
+            oldx = nil
             local i = currCursorX
             while string.sub(filelines[currCursorY + currFileOffset], i, i) == " " and i < #filelines[currCursorY + currFileOffset] do
                 i = i + 1
@@ -3669,6 +3705,7 @@ registerActionMulti({{"f", "t"}}, function(lst)
                 if currCursorX + currFileOffset < idx[#idx] - jumpoffset then
                     local oldcursor = currCursorX
                     currCursorX = currCursorX + (1 + jumpoffset)
+                    oldx = nil
                     while not tab.find(idx, currCursorX + currXOffset) and currCursorX + currXOffset < #filelines[currCursorY + currFileOffset] do
                         currCursorX = currCursorX + 1
                     end
@@ -3704,6 +3741,7 @@ registerActionMulti({{"F", "T"}}, function(lst)
             if #idx > 0 then
                 if currCursorX + currFileOffset > idx[1] + jumpoffset then
                     currCursorX = currCursorX - (1 + jumpoffset)
+                    oldx = nil
                     while not tab.find(idx, currCursorX + currXOffset) and currCursorX > 1 do
                         currCursorX = currCursorX - 1
                     end
