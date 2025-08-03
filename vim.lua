@@ -1290,7 +1290,7 @@ local function insertMode()
     local key
     while key ~= "tab" do
         key = pullTypeaheadWRMP()
-        if not isCharacterKey(key) then
+        if not isCharacterKey(key) and key ~= "C-v" then
             if key == "left" then
                 moveCursorLeft()
             elseif key == "right" then
@@ -1389,7 +1389,43 @@ local function insertMode()
             if filelines[currCursorY + currFileOffset] == nil then
                 filelines[currCursorY + currFileOffset] = ""
             end
-            local ch = getSelfInsert(key)
+            local ch
+            if key == "C-v" then
+                local rawKey = pullTypeahead()
+                if rawKey == "x" then
+                    local valid = true
+                    local charCode = 0
+                    for _ = 1, 2 do
+                        local nibbleChar = pullTypeahead()
+                        if not nibbleChar:find("^[0-9A-Fa-f]$") then
+                            valid = false
+                            break
+                        end
+                        local nibbleNum
+                        if nibbleChar:find("[A-F]") then
+                            nibbleNum = nibbleChar:byte() - ("A"):byte() + 10
+                        elseif nibbleChar:find("[a-f]") then
+                            nibbleNum = nibbleChar:byte() - ("a"):byte() + 10
+                        else
+                            nibbleNum = nibbleChar:byte() - ("0"):byte()
+                        end
+                        charCode = charCode * 16 + nibbleNum
+                    end
+                    if valid then
+                        ch = string.char(charCode)
+                    else
+                        ch = ""
+                    end
+                else
+                    ch = getSelfInsert(rawKey)
+                end
+            else
+                ch = getSelfInsert(key)
+            end
+            if ch == "\n" then
+                ch = ""
+                insertTypeahead("cr", {index = 1})
+            end
             filelines[currCursorY + currFileOffset] = string.sub(filelines[currCursorY + currFileOffset], 1, currCursorX + currXOffset - 1) .. ch ..string.sub(filelines[currCursorY + currFileOffset], currCursorX + currXOffset, #(filelines[currCursorY + currFileOffset]))
             currCursorX = currCursorX + #ch
             while currCursorX + lineoffset > wid do
