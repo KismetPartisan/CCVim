@@ -230,6 +230,7 @@ local modifierNames = {
     [keys.rightShift] = "S",
 }
 local modifierOrder = {"C", "A", "S"}
+local ignoreHold = {}  -- Modifiers that can only be prefixed
 local keyNormalisation = {
     ["<"] = "lt",
     -- [">"] = "gt",
@@ -440,7 +441,7 @@ local function waitForEvents()
                 insertTypeahead(translatedKey)
             end
         elseif translatedMod ~= nil then
-            if v2 and not activeModifiers[s] then
+            if (v2 and not activeModifiers[s]) or ignoreHold[s] then
                 -- If a key sends a repeat event without a start event,
                 -- it will not send key_up
                 prefixedModifiers[s] = not prefixedModifiers[s]
@@ -1496,6 +1497,15 @@ if fs.exists("/vim/.vimrc") then
                 end
             elseif rctable[1] == "finish" then
                 break
+            elseif rctable[1] == "ignorehold" then
+                local i = 1
+                while i < #rctable do
+                    i = i + 1
+                    local keyCode = keys[rctable[i]]
+                    if keyCode ~= nil then
+                        ignoreHold[keyCode] = true
+                    end
+                end
             elseif rctable[1] ~= "" and rctable[1] ~= nil then
                 error("Unrecognized vimrc command " .. rctable[1] .. ". Full vimscript is not yet supported.")
             end
