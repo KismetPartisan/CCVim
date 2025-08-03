@@ -440,12 +440,18 @@ local function waitForEvents()
                 insertTypeahead(translatedKey)
             end
         elseif translatedMod ~= nil then
-            activeModifiers[s] = true
-            if prefixedModifiers[s] then
-                prefixedModifiers[s] = nil  -- Repeated modifier presses remove the prefixed state
+            if v2 and not activeModifiers[s] then
+                -- If a key sends a repeat event without a start event,
+                -- it will not send key_up
+                prefixedModifiers[s] = not prefixedModifiers[s]
             else
-                prefixedModifiers[s] = not v2  -- Only prefixed if not held
-                -- FIXME repeats for the modifier keys seem to not be sent
+                activeModifiers[s] = true
+                if prefixedModifiers[s] then
+                    prefixedModifiers[s] = nil  -- Repeated modifier presses remove the prefixed state
+                else
+                    prefixedModifiers[s] = not v2  -- Only prefixed if not held
+                    -- FIXME repeats for the modifier keys seem to not be sent
+                end
             end
         end
     elseif e == "key_up" then
@@ -488,6 +494,9 @@ local function waitForEvents()
         end
         insertTypeahead(translatedKey, {update = {mouseX = v2, mouseY = v3}})
     elseif e == "paste" then
+        -- Warning! Some implementations do not paste when alt or shift is help
+        -- Prefix these modifiers to send them as a paste event for the program
+        -- to receive the clipboard contents
         local translatedKey = "C-v"
         local mods = getLatestModifiers(true)
         if mods.S then
