@@ -2237,9 +2237,10 @@ if #decargs["files"] > 0 then
         lastSearchLine = nil
     end
 else
-    openfiles = {}
+    openfiles = {""}
     filelines = {""}
-    currfile = 0
+    fileContents[1] = filelines
+    currfile = 1
 end
 
 if not (#openfiles > 0) then
