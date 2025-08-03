@@ -140,6 +140,7 @@ local typeaheadUpdates = {}  -- Mouse position updates
 local inputProperties = {mouseX = 1, mouseY = 1, pasteData = ""}
 local activeModifiers = {}
 local prefixedModifiers = {}
+local keyboards = {}
 local actionsTrie = Trie.new()
 local keyNamesTranslation = {
     backspace = "bs",
@@ -404,10 +405,15 @@ local function expandPaste(alwaysNoremap)
     end
 end
 
+local handleOsEvent
 local handleNonInputEvent  -- implemented after dependencies are declared
 
 local function waitForEvents()
     local e, s, v2, v3 = os.pullEvent()
+    handleOsEvent(e, s, v2, v3)
+end
+
+function handleOsEvent(e, s, v2, v3)
     if e == "char" then
         local mods = getLatestModifiers(true)
         if mods.S then
@@ -1292,6 +1298,18 @@ function handleNonInputEvent(e, s, v2, v3)
         if modeMsg ~= nil then
             sendMsg(modeMsg)
         end
+    elseif e:find("^tm_keyboard_") then
+        local innerEvent = e:match("^tm_keyboard_(.+)$")
+        local outerActiveModifiers = activeModifiers
+        local outerPrefixedModifiers = prefixedModifiers
+        if not keyboards[s] then
+            keyboards[s] = {activeModifiers = {}, prefixedModifiers = {}}
+        end
+        activeModifiers = keyboards[s].activeModifiers
+        prefixedModifiers = keyboards[s].prefixedModifiers
+        handleOsEvent(innerEvent, v2, v3, nil)
+        activeModifiers = outerActiveModifiers
+        prefixedModifiers = outerPrefixedModifiers
     end
 end
 
