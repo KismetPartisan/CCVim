@@ -141,57 +141,63 @@ local inputProperties = {mouseX = 1, mouseY = 1, pasteData = ""}
 local activeModifiers = {}
 local prefixedModifiers = {}
 local actionsTrie = Trie.new()
-local keyNames = {
-    [keys.backspace] = "bs",
-    [keys.enter] = "cr",
-    [keys.tab] = "tab",  -- Consider setting to "esc"?
-    [keys.numPadEnter] = "cr",
-    [keys.delete] = "del",
-    [keys.minus] = "-",
-    [keys.equals] = "=",
-    [keys.leftBracket] = "[",
-    [keys.rightBracket] = "]",
-    [keys.semiColon] = ";",
-    [keys.apostrophe] = "'",
-    [keys.grave] = "`",
-    [keys.backslash] = "backslash",
-    [keys.comma] = ",",
-    [keys.period] = ".",
-    [keys.slash] = "/",
-    [keys.multiply] = "kmultiply",
-    [keys.space] = " ",
-    [keys.one] = "1",
-    [keys.two] = "2",
-    [keys.three] = "3",
-    [keys.four] = "4",
-    [keys.five] = "5",
-    [keys.six] = "6",
-    [keys.seven] = "7",
-    [keys.eight] = "8",
-    [keys.nine] = "9",
-    [keys.zero] = "0",
-    [keys.numPadAdd] = "kplus",
-    [keys.numPadSubtract] = "kminus",
-    [keys.numPadDecimal] = "kpoint",
-    [keys.numPadEquals] = "kequal",
-    [keys.numPadComma] = "kcomma",
-    [keys.numPadDivide] = "kdivide",
-    [keys.numPad0] = "k0",
-    [keys.numPad1] = "k1",
-    [keys.numPad2] = "k2",
-    [keys.numPad3] = "k3",
-    [keys.numPad4] = "k4",
-    [keys.numPad5] = "k5",
-    [keys.numPad6] = "k6",
-    [keys.numPad7] = "k7",
-    [keys.numPad8] = "k8",
-    [keys.numPad9] = "k9",
-    [keys.yen] = "\xa5",
-    [keys.circumflex] = "^",
-    [keys.at] = "@",
-    [keys.colon] = ":",
-    [keys.underscore] = "_",
+local keyNamesTranslation = {
+    backspace = "bs",
+    enter = "cr",
+    tab = "tab",  -- Consider setting to "esc"?
+    numPadEnter = "cr",
+    delete = "del",
+    minus = "-",
+    equals = "=",
+    leftBracket = "[",
+    rightBracket = "]",
+    semiColon = ";",
+    apostrophe = "'",
+    grave = "`",
+    backslash = "backslash",
+    comma = ",",
+    period = ".",
+    slash = "/",
+    multiply = "kmultiply",
+    space = " ",
+    one = "1",
+    two = "2",
+    three = "3",
+    four = "4",
+    five = "5",
+    six = "6",
+    seven = "7",
+    eight = "8",
+    nine = "9",
+    zero = "0",
+    numPadAdd = "kplus",
+    numPadSubtract = "kminus",
+    numPadDecimal = "kpoint",
+    numPadEquals = "kequal",
+    numPadComma = "kcomma",
+    numPadDivide = "kdivide",
+    numPad0 = "k0",
+    numPad1 = "k1",
+    numPad2 = "k2",
+    numPad3 = "k3",
+    numPad4 = "k4",
+    numPad5 = "k5",
+    numPad6 = "k6",
+    numPad7 = "k7",
+    numPad8 = "k8",
+    numPad9 = "k9",
+    yen = "\xa5",
+    circumflex = "^",
+    at = "@",
+    colon = ":",
+    underscore = "_",
 }
+local keyNames = {}
+for k, v in pairs(keyNamesTranslation) do
+    if keys[k] then
+        keyNames[keys[k]] = v
+    end
+end
 local builtinKeyCharacters = {
     lt = "<",
     space = " ",
@@ -245,9 +251,6 @@ end
 local function registerSimpleKeys(names)
     local _, k
     for _, k in ipairs(names) do
-        if keys[k] == nil then
-            error("No such key: " .. k)
-        end
         keyNames[keys[k]] = k:lower()
     end
 end
