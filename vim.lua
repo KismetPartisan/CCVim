@@ -1978,6 +1978,10 @@ local function search(direction, research, currword, wrapSearchPos)
             table.insert(sessionSearches, #sessionSearches + 1, currSearch)
         end
     end
+    if currSearch == nil then
+        currSearch = ""
+        currline = currCursorY + currFileOffset
+    end
     --check if the last 2 characters are \c or \C, adjust the ignorecase variable
     if string.sub(currSearch, #currSearch - 1, #currSearch) == "\\c" then
         localcase = true
