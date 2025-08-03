@@ -108,7 +108,7 @@ local coreFiles = {
     {"str.lua", "lib/"},
     {"tab.lua", "lib/"},
 }
-local baseUrl = "https://raw.githubusercontent.com/Minater247/CCVim/main/"
+local baseUrl = "https://raw.githubusercontent.com/Vftdan/CCVim/main/"
 
 local function install()
     print("Downloading files from github...")

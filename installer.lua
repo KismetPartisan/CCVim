@@ -19,7 +19,7 @@ print("Download now? (y/n)")
 local input = read()
 if input == "y" then
     print("Downloading...")
-    download("https://raw.githubusercontent.com/Minater247/CCVim/main/vim_installer.lua", "/vim/installer")
+    download("https://raw.githubusercontent.com/Vftdan/CCVim/main/vim_installer.lua", "/vim/installer")
     fs.delete("/vim/installer.lua") --legacy installer no longer needed
     fs.move("/vim/installer", "/vim/vim_installer.lua")
     print("Done! Please re-run the installer using `vim_installer`.")
