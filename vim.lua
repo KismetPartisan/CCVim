@@ -1327,6 +1327,7 @@ function handleNonInputEvent(e, s, v2, v3)
     end
 end
 
+local normalModeSingle
 local function insertMode()
     drawFile(true)
     setModeMsg("-- INSERT --")
@@ -1346,6 +1347,10 @@ local function insertMode()
                 moveCursorDown()
             elseif key == "C-S-v" then
                 expandPaste(true)
+            elseif key == "C-o" then
+                setModeMsg("-- (insert) --")
+                normalModeSingle()
+                setModeMsg("-- INSERT --")
             elseif key == "bs" then
                 if filelines[currCursorY + currFileOffset] ~= "" and filelines[currCursorY + currFileOffset] ~= nil and currCursorX > 1 then
                     filelines[currCursorY + currFileOffset] = string.sub(filelines[currCursorY + currFileOffset], 1, currCursorX + currXOffset - 2) .. string.sub(filelines[currCursorY + currFileOffset], currCursorX + currXOffset, #(filelines[currCursorY + currFileOffset]))
@@ -4144,7 +4149,7 @@ registerAction("<C-S-v>", function()
     expandPaste()
 end)
 
-while running == true do
+function normalModeSingle()
     local cons = actionsTrie:consumer()
     local i = 0
     local prefix = {}
@@ -4187,9 +4192,17 @@ while running == true do
                 pullTypeahead()
             end
             action()
+            return true
         else
             -- Drop one key
             pullTypeahead()
+            return false
         end
+    else
+        return false
     end
+end
+
+while running == true do
+    normalModeSingle()
 end
