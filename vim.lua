@@ -135,6 +135,7 @@ local sessionSearches = {}
 local repeatCount0 = 0
 local repeatCount1 = 1
 local scrollOption = 10
+local shiftWidth = 4
 local modeMsg
 local typeahead = {}  -- String keys and pseudokeys
 local typeaheadUpdates = {}  -- Mouse position updates
@@ -320,6 +321,13 @@ local function registerMapping(src, dst, opts)
             trie:put(srcArr, entry)
         end
     end
+end
+
+local function getShiftWidth()
+    if shiftWidth < 1 then
+        return 1  -- tabstop is currently always 1
+    end
+    return shiftWidth
 end
 
 local function resetSize()
@@ -2929,6 +2937,10 @@ registerAction(":", function()
                         if tonumber(stri) then
                             scrollOption = tonumber(stri)
                         end
+                    elseif comm == "shiftwidth" or comm == "sw" then
+                        if tonumber(stri) then
+                            shiftWidth = tonumber(stri)
+                        end
                     end
                     resetSize()
                     recalcMLCs(true)
@@ -4077,6 +4089,54 @@ registerAction("<leftmouse>", function()
         currCursorX = #line - currXOffset
     end
     redrawTerm()
+end)
+
+registerAction(">>", function()
+    resetLastSearch()
+    oldx = nil
+    local singleShiftBuilder = {}
+    for i = 1, getShiftWidth() do
+        singleShiftBuilder[i] = " "
+    end
+    local singleShift = table.concat(singleShiftBuilder)
+    local repeatedShiftBuilder = {}
+    for i = 1, repeatCount1 do
+        repeatedShiftBuilder[i] = singleShift
+    end
+    local repeatedShift = table.concat(repeatedShiftBuilder)
+    local line = filelines[currCursorY + currFileOffset]
+    filelines[currCursorY + currFileOffset] = repeatedShift .. line
+    currCursorX = currCursorX + #repeatedShift
+    if currCursorX + lineoffset > wid then
+        local delta = wid - currCursorX - lineoffset
+        currCursorX = currCursorX + delta
+        currXOffset = currXOffset - delta
+    end
+    recalcMLCs()
+    fileContents[currfile]["unsavedchanges"] = true
+    drawFile()
+end)
+registerAction("<lt><lt>", function()
+    resetLastSearch()
+    oldx = nil
+    local amount = getShiftWidth() * repeatCount1
+    local line = filelines[currCursorY + currFileOffset]
+    local firstNonBlank = line:find("[^ \x09]") or #line + 1
+    if amount >= firstNonBlank then
+        amount = firstNonBlank - 1
+    end
+    filelines[currCursorY + currFileOffset] = line:sub(amount + 1)
+    currCursorX = currCursorX - amount
+    if currCursorX < 1 then
+        currXOffset = currXOffset + currCursorX - 1
+        currCursorX = 1
+        if currXOffset < 0 then
+            currXOffset = 0
+        end
+    end
+    recalcMLCs()
+    fileContents[currfile]["unsavedchanges"] = true
+    drawFile()
 end)
 
 -- By default paste content is interpreted as normal-mode keys, use mappings to change this behavior
