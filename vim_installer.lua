@@ -181,7 +181,7 @@ local function install()
     end
     local allExist = true
     for _, file in ipairs(coreFiles) do
-        allExist = allExist and fs.exists("/vim/" .. file[1])
+        allExist = allExist and fs.exists("/vim/" .. (file[2] or "") .. file[1])
     end
     if allExist then
         print("Finished installing.")
