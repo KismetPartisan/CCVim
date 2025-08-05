@@ -3217,30 +3217,58 @@ registerAction("J", function()
             end
         end)
 registerAction("o", function()
-            lastSearchPos = nil
-            lastSearchLine = nil
-            table.insert(filelines, currCursorY + currFileOffset + 1, "")
-            moveCursorDown()
-            currCursorX = 1
+    resetLastSearch()
+    local line = filelines[currCursorY + currFileOffset]
+    local indentedamount = 0
+    if autoindent then
+        indentedamount = (line:find("[^ \x09]") or #line + 1) - 1
+    end
+    table.insert(filelines, currCursorY + currFileOffset + 1, line:sub(1, indentedamount))
+    moveCursorDown()
+    currCursorX = indentedamount + 1 - currXOffset
+    if currCursorX + lineoffset > wid then
+        local delta = wid - currCursorX - lineoffset
+        currCursorX = currCursorX + delta
+        currXOffset = currXOffset - delta
+    elseif currCursorX < 1 then
+        currXOffset = currXOffset + currCursorX - 1
+        currCursorX = 1
+        if currXOffset < 0 then
             currXOffset = 0
-            recalcMLCs()
-            drawFile(true)
-            insertMode()
-            if fileContents[currfile] then
-                fileContents[currfile]["unsavedchanges"] = true
-            end
-        end)
+        end
+    end
+    recalcMLCs()
+    drawFile(true)
+    insertMode()
+    if fileContents[currfile] then
+        fileContents[currfile]["unsavedchanges"] = true
+    end
+end)
 registerAction("O", function()
-            lastSearchPos = nil
-            lastSearchLine = nil
-            table.insert(filelines, currCursorY + currFileOffset, "")
-            currCursorX = 1
+    resetLastSearch()
+    local line = filelines[currCursorY + currFileOffset]
+    local indentedamount = 0
+    if autoindent then
+        indentedamount = (line:find("[^ \x09]") or #line + 1) - 1
+    end
+    table.insert(filelines, currCursorY + currFileOffset, line:sub(1, indentedamount))
+    currCursorX = indentedamount + 1 - currXOffset
+    if currCursorX + lineoffset > wid then
+        local delta = wid - currCursorX - lineoffset
+        currCursorX = currCursorX + delta
+        currXOffset = currXOffset - delta
+    elseif currCursorX < 1 then
+        currXOffset = currXOffset + currCursorX - 1
+        currCursorX = 1
+        if currXOffset < 0 then
             currXOffset = 0
-            recalcMLCs()
-            drawFile(true)
-            insertMode()
-            fileContents[currfile]["unsavedchanges"] = true
-        end)
+        end
+    end
+    recalcMLCs()
+    drawFile(true)
+    insertMode()
+    fileContents[currfile]["unsavedchanges"] = true
+end)
 registerAction("a", function()
             moveCursorRight(0)
             insertMode()
