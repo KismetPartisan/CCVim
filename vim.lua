@@ -2159,6 +2159,36 @@ local function search(direction, research, currword, wrapSearchPos)
     currentMode = prevMode
 end
 
+local function switchToFile(idx, opts)
+    opts = opts or {}
+    fileContents[currfile] = filelines
+    fileContents[currfile]["cursor"] = {currCursorX, currXOffset, currCursorY, currFileOffset}
+    currfile = idx
+    if currfile > #fileContents or currfile < 1 then
+        currfile = (currfile - 1) % #fileContents + 1
+    end
+    filelines = fileContents[currfile]
+    if fileContents[currfile]["cursor"] then
+        currCursorX = fileContents[currfile]["cursor"][1]
+        currXOffset = fileContents[currfile]["cursor"][2]
+        currCursorY = fileContents[currfile]["cursor"][3]
+        currFileOffset = fileContents[currfile]["cursor"][4]
+    else
+        currCursorX = 1
+        currXOffset = 0
+        currCursorY = 1
+        currFileOffset = 0
+    end
+    recalcMLCs(true)
+    drawFile(true)
+    filename = openfiles[currfile]
+    if opts.newfile then
+        sendMsg("\"" .. filename .."\"  [New File] " .. #filelines .. "L, " .. tab.countchars(filelines) .. "C")
+    else
+        sendMsg("\"" .. filename .. "\" " .. #filelines .. "L, " .. tab.countchars(filelines) .. "C")
+    end
+end
+
 
 for i=1,#decargs,1 do
     if decargs[i] == "--version" then
@@ -2351,7 +2381,19 @@ registerAction(":", function()
             local cmdtab = str.split(cmd, " ")
             lastSearchPos = nil
             lastSearchLine = nil
-            if cmdtab[1] == ":sav" or cmdtab[1] == ":saveas" or cmdtab[1] == ":sav!" or cmdtab[1] == ":saveas!" then
+            if cmd:sub(1, 2) == ":!" then
+                local oldCursor = {term.getCursorPos()}
+                term.setCursorPos(1, hig)
+                setcolors(colors.black, colors.white)
+                shell.run(cmd:sub(3, 4))
+                print("Exited, press enter to continue...")
+                local _, k = os.pullEvent("key")
+                while k ~= keys.enter do
+                    _, k = os.pullEvent("key")
+                end
+                resetSize()
+                redrawTerm()
+            elseif cmdtab[1] == ":sav" or cmdtab[1] == ":saveas" or cmdtab[1] == ":sav!" or cmdtab[1] == ":saveas!" then
                 local name = ""
                 for i=2,#cmdtab,1 do
                     name = name .. cmdtab[i]
@@ -2432,24 +2474,11 @@ registerAction(":", function()
                         setpos(1, 1)
                         running = false
                     else
-                        table.remove(fileContents, currfile)
-                        table.remove(openfiles, currfile)
-                        if not (currfile == 1) then
-                            currfile = currfile - 1
-                        end
-                        filelines = fileContents[currfile]
-                        if fileContents[currfile] then
-                            if fileContents[currfile]["cursor"] then
-                                currCursorX = fileContents[currfile]["cursor"][1]
-                                currXOffset = fileContents[currfile]["cursor"][2]
-                                currCursorY = fileContents[currfile]["cursor"][3]
-                                currFileOffset = fileContents[currfile]["cursor"][4]
-                            end
-                        end
-                        recalcMLCs(true)
-                        drawFile(true)
+                        local oldfile = currfile
                         clearScreenLine(hig)
-                        sendMsg("\""..openfiles[currfile].."\" "..#filelines.."L, "..tab.countchars(filelines).."C")
+                        switchToFile(currfile - 1)
+                        table.remove(fileContents, oldfile)
+                        table.remove(openfiles, oldfile)
                     end
                 end
             elseif cmdtab[1] == ":wq" or cmdtab[1] == ":x" then
@@ -2483,21 +2512,11 @@ registerAction(":", function()
                                 setpos(1, 1)
                                 running = false
                             else
-                                table.remove(fileContents, currfile)
-                                table.remove(openfiles, currfile)
-                                if not (currfile == 1) then
-                                    currfile = currfile - 1
-                                end
-                                filelines = fileContents[currfile]
-                                if fileContents[currfile]["cursor"] then
-                                    currCursorX = fileContents[currfile]["cursor"][1]
-                                    currXOffset = fileContents[currfile]["cursor"][2]
-                                    currCursorY = fileContents[currfile]["cursor"][3]
-                                    currFileOffset = fileContents[currfile]["cursor"][4]
-                                end
-                                recalcMLCs(true)
-                                drawFile(true)
+                                local oldfile = currfile
                                 clearScreenLine(hig)
+                                switchToFile(currfile - 1)
+                                table.remove(fileContents, oldfile)
+                                table.remove(openfiles, oldfile)
                             end
                         end
                     end
@@ -2621,80 +2640,17 @@ registerAction(":", function()
                 end
             elseif cmdtab[1] == ":tabn" or cmdtab[1] == ":tabnext" then
                 if #fileContents > 1 then
-                    if currfile ~= #fileContents then
-                        fileContents[currfile] = filelines
-                        fileContents[currfile]["cursor"] = {currCursorX, currXOffset, currCursorY, currFileOffset}
-                        currfile = currfile + 1
-                        filelines = fileContents[currfile]
-                        if fileContents[currfile]["cursor"] then
-                            currCursorX = fileContents[currfile]["cursor"][1]
-                            currXOffset = fileContents[currfile]["cursor"][2]
-                            currCursorY = fileContents[currfile]["cursor"][3]
-                            currFileOffset = fileContents[currfile]["cursor"][4]
-                        end
-                    else
-                        fileContents[currfile] = filelines
-                        fileContents[currfile]["cursor"] = {currCursorX, currXOffset, currCursorY, currFileOffset}
-                        currfile = 1
-                        filelines = fileContents[currfile]
-                        if fileContents[currfile]["cursor"] then
-                            currCursorX = fileContents[currfile]["cursor"][1]
-                            currXOffset = fileContents[currfile]["cursor"][2]
-                            currCursorY = fileContents[currfile]["cursor"][3]
-                            currFileOffset = fileContents[currfile]["cursor"][4]
-                        end
-                    end
-                    recalcMLCs(true)
-                    drawFile(true)
-                    sendMsg("\""..openfiles[currfile].."\" "..#filelines.."L, "..tab.countchars(filelines).."C")
-                    filename = openfiles[currfile]
+                    switchToFile(currfile + 1)
                 end
             elseif cmdtab[1] == ":tabp" or cmdtab[1] == ":tabprevious" then
                 if #fileContents > 1 then
-                    if currfile ~= 1 then
-                        fileContents[currfile] = filelines
-                        fileContents[currfile]["cursor"] = {currCursorX, currXOffset, currCursorY, currFileOffset}
-                        currfile = currfile - 1
-                        filelines = fileContents[currfile]
-                        if fileContents[currfile]["cursor"] then
-                            currCursorX = fileContents[currfile]["cursor"][1]
-                            currXOffset = fileContents[currfile]["cursor"][2]
-                            currCursorY = fileContents[currfile]["cursor"][3]
-                            currFileOffset = fileContents[currfile]["cursor"][4]
-                        end
-                    else
-                        fileContents[currfile] = filelines
-                        fileContents[currfile]["cursor"] = {currCursorX, currXOffset, currCursorY, currFileOffset}
-                        currfile = #fileContents
-                        filelines = fileContents[currfile]
-                        if fileContents[currfile]["cursor"] then
-                            currCursorX = fileContents[currfile]["cursor"][1]
-                            currXOffset = fileContents[currfile]["cursor"][2]
-                            currCursorY = fileContents[currfile]["cursor"][3]
-                            currFileOffset = fileContents[currfile]["cursor"][4]
-                        end
-                    end
-                    recalcMLCs(true)
-                    drawFile(true)
-                    sendMsg("\""..openfiles[currfile].."\" "..#filelines.."L, "..tab.countchars(filelines).."C")
-                    filename = openfiles[currfile]
+                    switchToFile(currfile - 1)
                 end
             elseif cmdtab[1] == ":tabm" or cmdtab[1] == ":tabmove" then
-                fileContents[currfile] = filelines
-                fileContents[currfile]["cursor"] = {currCursorX, currXOffset, currCursorY, currFileOffset}
                 local tmp = tonumber(cmdtab[2])
                 if tonumber(cmdtab[2]) >= 0 and tonumber(cmdtab[2]) <= #fileContents - 1 then
-                    currfile = tonumber(cmdtab[2]) + 1
-                    filelines = fileContents[currfile]
-                    if fileContents[currfile]["cursor"] then
-                        currCursorX = fileContents[currfile]["cursor"][1]
-                        currXOffset = fileContents[currfile]["cursor"][2]
-                        currCursorY = fileContents[currfile]["cursor"][3]
-                        currFileOffset = fileContents[currfile]["cursor"][4]
-                    end
-                    recalcMLCs(true)
-                    drawFile(true)
-                    sendMsg("\""..openfiles[currfile].."\" "..#filelines.."L, "..tab.countchars(filelines).."C")
+                    -- This is not what :tabmove should do!
+                    switchToFile(tonumber(cmdtab[2]) + 1)
                 end
                 clearScreenLine(hig)
             elseif cmdtab[1] == ":tabo" or cmdtab[1] == ":tabonly" or cmdtab[1] == ":tabo!" or cmdtab[1] == ":tabonly!" then
@@ -2723,7 +2679,7 @@ registerAction(":", function()
                     end
                     drawFile()
                     clearScreenLine(hig)
-                    sendMsg("\""..openfiles[currfile].."\" "..#filelines.."L, "..tab.countchars(filelines).."C")
+                    sendMsg("\"" .. filename .. "\" " .. #filelines .. "L, " .. tab.countchars(filelines) .. "C")
                 end
             elseif cmdtab[1] == ":tabnew" then
                 if not cmdtab[2] then
@@ -2738,21 +2694,7 @@ registerAction(":", function()
                     if tonumber(cmdtab[2]) > 1 then
                         write("s")
                     end
-                    fileContents[currfile] = filelines
-                    fileContents[currfile]["cursor"] = {currCursorX, currXOffset, currCursorY, currFileOffset}
-                    currfile = currfile + 1
-                    filelines = fileContents[currfile]
-                    if openfiles[currfile] ~= "" then
-                        sendMsg("\""..openfiles[currfile].."\" "..#filelines.."L, "..tab.countchars(filelines).."C")
-                    else
-                        sendMsg("\""..openfiles[currfile].."\"  [New File] "..#filelines.."L, "..tab.countchars(filelines).."C")
-                    end
-                    currCursorX = 1
-                    currXOffset = 0
-                    currCursorY = 1
-                    currFileOffset = 0
-                    recalcMLCs(true)
-                    drawFile(true)
+                    switchToFile(currfile + 1)
                 else
                     if cmdtab[2] then
                         local name = ""
@@ -2768,8 +2710,6 @@ registerAction(":", function()
                             else
                                 name = fil.topath(name)
                             end
-                            fileContents[currfile] = filelines
-                            fileContents[currfile]["cursor"] = {currCursorX, currXOffset, currCursorY, currFileOffset}
                             table.insert(fileContents, currfile + 1, fil.toArr(fil.topath(name)))
                             local newfile = false
                             if not fileContents[#fileContents] then
@@ -2777,19 +2717,7 @@ registerAction(":", function()
                                 fileContents[#fileContents] = {""}
                             end
                             table.insert(openfiles, currfile + 1, name)
-                            currfile = currfile + 1
-                            filelines = fileContents[currfile]
-                            openfiles[currfile] = name
-                            filename = openfiles[currfile]
-                            if newfile then
-                                sendMsg("\""..openfiles[currfile].."\"  [New File] "..#filelines.."L, "..tab.countchars(filelines).."C")
-                            else
-                                sendMsg("\""..openfiles[currfile].."\" "..#filelines.."L, "..tab.countchars(filelines).."C")
-                            end
-                            currCursorX = 1
-                            currXOffset = 0
-                            currCursorY = 1
-                            currFileOffset = 0
+                            switchToFile(currfile + 1, {newfile = newfile})
                             local tb = str.wordBeginnings(filelines[1])
                             if tb[1] then
                                 currCursorX = tb[1]
@@ -2820,16 +2748,7 @@ registerAction(":", function()
                                 table.insert(fileContents, currfile + 1, {""})
                             end
                             table.insert(openfiles, currfile + 1, name)
-                            fileContents[currfile] = filelines
-                            fileContents[currfile]["cursor"] = {currCursorX, currXOffset, currCursorY, currFileOffset}
-                            currfile = currfile + 1
-                            filelines = fileContents[currfile]
-                            openfiles[currfile] = name
-                            sendMsg("\""..openfiles[currfile].."\"  [New File] "..#filelines.."L, "..tab.countchars(filelines).."C")
-                            currCursorX = 1
-                            currXOffset = 0
-                            currCursorY = 1
-                            currFileOffset = 0
+                            switchToFile(currfile + 1, {newfile = newfile})
                             if string.find(openfiles[currfile], "%.") then
                                 local filenamestring = string.sub(openfiles[currfile], string.find(openfiles[currfile], "%.") + 1, #openfiles[currfile])
                                 if fs.exists("/vim/syntax/"..filenamestring..".lua") then
@@ -2846,17 +2765,7 @@ registerAction(":", function()
                         --just add an empty tab
                         table.insert(fileContents, currfile + 1, {""})
                         table.insert(openfiles, currfile + 1, "")
-                        fileContents[currfile] = filelines
-                        fileContents[currfile]["cursor"] = {currCursorX, currXOffset, currCursorY, currFileOffset}
-                        currfile = currfile + 1
-                        filelines = fileContents[currfile]
-                        sendMsg("\""..openfiles[currfile].."\" "..#filelines.."L, "..tab.countchars(filelines).."C")
-                        currCursorX = 1
-                        currXOffset = 0
-                        currCursorY = 1
-                        currFileOffset = 0
-                        recalcMLCs(true)
-                        drawFile(true)
+                        switchToFile(currfile + 1)
                     end
                 end
                 if string.find(openfiles[currfile], "%.") then
@@ -2872,22 +2781,11 @@ registerAction(":", function()
                         setpos(1, 1)
                         running = false
                     else
-                        table.remove(fileContents, currfile)
-                        table.remove(openfiles, currfile)
-                        if not (currfile == 1) then
-                            currfile = currfile - 1
-                        end
-                        filelines = fileContents[currfile]
-                        if fileContents[currfile]["cursor"] then
-                            currCursorX = fileContents[currfile]["cursor"][1]
-                            currXOffset = fileContents[currfile]["cursor"][2]
-                            currCursorY = fileContents[currfile]["cursor"][3]
-                            currFileOffset = fileContents[currfile]["cursor"][4]
-                        end
-                        recalcMLCs(true)
-                        drawFile(true)
+                        local oldfile = currfile
                         clearScreenLine(hig)
-                        sendMsg("\""..openfiles[currfile].."\" "..#filelines.."L, "..tab.countchars(filelines).."C")
+                        switchToFile(currfile - 1)
+                        table.remove(fileContents, oldfile)
+                        table.remove(openfiles, oldfile)
                     end
                 end
             elseif cmdtab[1] == ":set" then
@@ -3586,62 +3484,18 @@ registerAction("g_", function() resetLastSearch()
                 end
                 drawFile()
             end)
-registerAction("gt", function() resetLastSearch()
-    fileContents[currfile] = filelines
-    fileContents[currfile]["cursor"] = {currCursorX, currXOffset, currCursorY, currFileOffset}
+registerAction("gt", function()
+    resetLastSearch()
     if repeatCount0 > 0 then
-        currfile = repeatCount0
+        switchToFile(repeatCount0)
     else
-        currfile = currfile + 1
+        switchToFile(currfile + 1)
     end
-    if currfile > #fileContents then
-        currfile = (currfile - 1) % #fileContents + 1
-    end
-    filelines = fileContents[currfile]
-    if fileContents[currfile]["cursor"] then
-        currCursorX = fileContents[currfile]["cursor"][1]
-        currXOffset = fileContents[currfile]["cursor"][2]
-        currCursorY = fileContents[currfile]["cursor"][3]
-        currFileOffset = fileContents[currfile]["cursor"][4]
-    end
-    recalcMLCs(true)
-    drawFile(true)
-    sendMsg("\""..openfiles[currfile].."\" "..#filelines.."L, "..tab.countchars(filelines).."C")
 end)
-registerAction("gT", function() resetLastSearch()
-                if #fileContents > 1 then
-                    if currfile ~= 1 then
-                        fileContents[currfile] = filelines
-                        fileContents[currfile]["cursor"] = {currCursorX, currXOffset, currCursorY, currFileOffset}
-                        currfile = currfile - 1
-                        filelines = fileContents[currfile]
-                        if fileContents[currfile]["cursor"] then
-                            currCursorX = fileContents[currfile]["cursor"][1]
-                            currXOffset = fileContents[currfile]["cursor"][2]
-                            currCursorY = fileContents[currfile]["cursor"][3]
-                            currFileOffset = fileContents[currfile]["cursor"][4]
-                        end
-                        recalcMLCs(true)
-                        drawFile(true)
-                        sendMsg("\""..openfiles[currfile].."\" "..#filelines.."L, "..tab.countchars(filelines).."C")
-                    else
-                        fileContents[currfile] = filelines
-                        fileContents[currfile]["cursor"] = {currCursorX, currXOffset, currCursorY, currFileOffset}
-                        currfile = #fileContents
-                        filelines = fileContents[currfile]
-                        if fileContents[currfile]["cursor"] then
-                            currCursorX = fileContents[currfile]["cursor"][1]
-                            currXOffset = fileContents[currfile]["cursor"][2]
-                            currCursorY = fileContents[currfile]["cursor"][3]
-                            currFileOffset = fileContents[currfile]["cursor"][4]
-                        end
-                        recalcMLCs(true)
-                        drawFile(true)
-                        sendMsg("\""..openfiles[currfile].."\" "..#filelines.."L, "..tab.countchars(filelines).."C")
-                    end
-                    filename = openfiles[currfile]
-                end
-            end)
+registerAction("gT", function()
+    resetLastSearch()
+    switchToFile(currfile - 1)
+end)
 registerAction("G", function()
     resetLastSearch()
     if repeatCount0 > 0 then
