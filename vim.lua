@@ -3245,15 +3245,41 @@ registerAction("y$", function()
                 copytype = "text"
             end)
 registerAction("x", function()
-            copybuffer = string.sub(filelines[currCursorY + currFileOffset], currCursorX + currXOffset, currCursorX + currXOffset)
-            copytype = "text"
-            filelines[currCursorY + currFileOffset] = string.sub(filelines[currCursorY + currFileOffset], 1, currCursorX + currXOffset - 1) .. string.sub(filelines[currCursorY + currFileOffset], currCursorX + currXOffset + 1, #filelines[currCursorY + currFileOffset])
-            recalcMLCs()
-            drawFile()
-            if fileContents[currfile] then
-                fileContents[currfile]["unsavedchanges"] = true
-            end
-        end)
+    local beg = currCursorX + currXOffset
+    local ed = beg + repeatCount1 - 1
+    local line = filelines[currCursorY + currFileOffset]
+    if ed > #line then
+        ed = #line
+    end
+    copybuffer = string.sub(line, beg, ed)
+    copytype = "text"
+    filelines[currCursorY + currFileOffset] = string.sub(line, 1, beg - 1) .. string.sub(line, ed + 1, #line)
+    recalcMLCs()
+    drawFile()
+    if fileContents[currfile] then
+        fileContents[currfile]["unsavedchanges"] = true
+    end
+end)
+registerAction("X", function()
+    local ed = currCursorX + currXOffset - 1
+    local beg = ed - repeatCount1 + 1
+    if beg < 1 then
+        beg = 1
+    end
+    if ed < beg then
+        -- Real Vim pushes undo state, but does not erase the register or mark the file as modified
+        return
+    end
+    local line = filelines[currCursorY + currFileOffset]
+    copybuffer = string.sub(line, beg, ed)
+    copytype = "text"
+    filelines[currCursorY + currFileOffset] = string.sub(line, 1, beg - 1) .. string.sub(line, ed + 1, #line)
+    recalcMLCs()
+    drawFile()
+    if fileContents[currfile] then
+        fileContents[currfile]["unsavedchanges"] = true
+    end
+end)
 function resetLastSearch()
             lastSearchPos = nil
             lastSearchLine = nil
