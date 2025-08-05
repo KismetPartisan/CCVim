@@ -2351,7 +2351,19 @@ registerAction(":", function()
             local cmdtab = str.split(cmd, " ")
             lastSearchPos = nil
             lastSearchLine = nil
-            if cmdtab[1] == ":sav" or cmdtab[1] == ":saveas" or cmdtab[1] == ":sav!" or cmdtab[1] == ":saveas!" then
+            if cmd:sub(1, 2) == ":!" then
+                local oldCursor = {term.getCursorPos()}
+                term.setCursorPos(1, hig)
+                setcolors(colors.black, colors.white)
+                shell.run(cmd:sub(3, 4))
+                print("Exited, press enter to continue...")
+                local _, k = os.pullEvent("key")
+                while k ~= keys.enter do
+                    _, k = os.pullEvent("key")
+                end
+                resetSize()
+                redrawTerm()
+            elseif cmdtab[1] == ":sav" or cmdtab[1] == ":saveas" or cmdtab[1] == ":sav!" or cmdtab[1] == ":saveas!" then
                 local name = ""
                 for i=2,#cmdtab,1 do
                     name = name .. cmdtab[i]
