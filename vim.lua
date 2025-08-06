@@ -104,6 +104,7 @@ local modeMappings = {
     n = Trie.new(),
     i = Trie.new(),
     c = Trie.new(),
+    o = Trie.new(),
 }
 local mappingCommands = {
     map = {mode = "", remap = true},
@@ -111,11 +112,13 @@ local mappingCommands = {
     nmap = {mode = "n", remap = true},
     imap = {mode = "i", remap = true},
     cmap = {mode = "c", remap = true},
+    omap = {mode = "o", remap = true},
     noremap = {mode = "", remap = false},
     ["noremap!"] = {mode = "!", remap = false},
     nnoremap = {mode = "n", remap = false},
     inoremap = {mode = "i", remap = false},
     cnoremap = {mode = "c", remap = false},
+    onoremap = {mode = "o", remap = false},
 }
 local currentMode = "n"
 local noremapFor = 0
@@ -318,7 +321,7 @@ local function registerMapping(src, dst, opts)
     local dstArr = keyseq.parseKeySequence(dst, keyNormalisation, modifierOrder)
     local mode = opts.mode or ""
     if mode == "" then
-        mode = "n"
+        mode = "no"
     elseif mode == "!" then
         mode = "ic"
     end
@@ -728,6 +731,74 @@ local function pullCommand(input, numeric, len)
     modeMsg = oldModeMsg
     currentMode = prevMode
     return input
+end
+
+local function pullTextObject(opts)
+    local prevMode = currentMode
+    currentMode = "o"
+    opts = opts and itertools.collect(pairs(opts)) or {}
+    opts.wantX = opts.wantX or oldx
+    opts.x = opts.x or currCursorX + currXOffset
+    opts.y = opts.y or currCursorY + currFileOffset
+    opts.initialX = opts.initialX or opts.x
+    opts.initialY = opts.initialY or opts.y
+    local prio = {motion = 1, max = 1}
+    local cons = Trie.Consumer.new{
+        n = prio.max,
+        [prio.motion] = motionsTrie,
+    }
+    local countMultiplier = repeatCount1
+    local countStr = pullCount()
+    if #countStr > 0 then
+        repeatCount0 = tonumber(countStr) * countMultiplier
+        repeatCount1 = repeatCount0
+    end
+    local i = 0
+    while true do
+        i = i + 1
+        local key
+        if i == 1 then
+            key = peekTypeaheadWRMP(i)
+        else
+            key = peekTypeahead(i)
+        end
+        if key == "C-c" then
+            -- Clear typeahead
+            for _ = 1, i do
+                pullTypeahead()
+            end
+            cons = nil
+            break
+        end
+        if not cons:next(key) then
+            break
+        end
+        if not cons:hasNext() then
+            break
+        end
+    end
+    if cons ~= nil then
+        local len, entry, kind = cons:getDeepest()
+        if len > 0 then
+            for _ = 1, len do
+                pullTypeahead()
+            end
+            if kind == prio.motion then
+                if entry[2] then
+                    itertools.update(opts, entry[2])
+                end
+                opts = entry[1](opts) or opts
+            end
+        else
+            -- Drop one key
+            pullTypeahead()
+            opts = nil
+        end
+    else
+        opts = nil  -- no text object returned => operator should terminate
+    end
+    currentMode = prevMode
+    return opts
 end
 
 local function clearScreenLine(line)
@@ -3370,20 +3441,62 @@ registerAction("dd", function() resetLastSearch()
     fileContents[currfile]["unsavedchanges"] = true
     afterDelete()
 end)
-registerAction("dw", function() resetLastSearch()
-                local word,beg,ed = str.wordOfPos(filelines[currCursorY + currFileOffset], currCursorX + currXOffset)
-                copybuffer = word
-                if ed ~= #filelines[currCursorY + currFileOffset] then
-                    copybuffer = copybuffer .. " "
-                end
-                copytype = "text"
-                if ed ~= #filelines[currCursorY + currFileOffset] then
-                    ed = ed + 1
-                end
-                currCursorX = beg - 1
-                filelines[currCursorY + currFileOffset] = string.sub(filelines[currCursorY + currFileOffset], 1, beg - 1) .. string.sub(filelines[currCursorY + currFileOffset], ed + 1, #filelines[currCursorY + currFileOffset])
-                fileContents[currfile]["unsavedchanges"] = true
-            afterDelete() end)
+registerAction("d", function()
+    resetLastSearch()
+    local to = pullTextObject()
+    if to == nil then
+        sendMsg("No text object")
+        return
+    end
+    local begX, begY, edX, edY = to.initialX, to.initialY, to.x, to.y
+    if edY < begY or edY == begY and edX < begX then
+        begX, edX = edX, begX
+        begY, edY = edY, begY
+    end
+    if to.linewise then
+        copybuffer = {}
+        for i = begY, edY do
+            table.insert(copybuffer, #copybuffer + 1, filelines[i])
+        end
+        copytype = "linetable"
+        for _ = begY, edY do
+            table.remove(filelines, begY)
+        end
+        if #filelines < 1 then
+            filelines[1] = ""
+        end
+        fileContents[currfile]["unsavedchanges"] = true
+    else
+        if to.exclusive then
+            edX = edX - 1
+            if begY == edY and edX < begX then
+                -- push undo state
+                return
+            end
+            if edX < 1 then
+                edY = edY - 1
+                -- SAFETY: edY >= 1 because begY >= 1 and edY >= begY
+                edX = #filelines[edY]
+            end
+        end
+        if begY ~= edY then
+            err("TODO: multiline characterwise, press enter to continue...")
+            local _, k = os.pullEvent("key")
+            while k ~= keys.enter do
+                _, k = os.pullEvent("key")
+            end
+            redrawTerm()
+            return
+        else
+            local line = filelines[begY]
+            copybuffer = string.sub(line, begX, edX)
+            copytype = "text"
+            filelines[currCursorY + currFileOffset] = string.sub(line, 1, begX - 1) .. string.sub(line, edX + 1, #line)
+            fileContents[currfile]["unsavedchanges"] = true
+        end
+    end
+    afterDelete()
+end)
 registerAction("diw", function() resetLastSearch() local word, beg, ed
                 local word,beg,ed
                     word,beg,ed = str.wordOfPos(filelines[currCursorY + currFileOffset], currCursorX + currXOffset)
