@@ -4120,6 +4120,8 @@ registerAction("<C-S-v>", function()
 end)
 
 function normalModeSingle()
+    local prevMode = currentMode
+    currentMode = "n"
     local prio = {action = 2, motion = 1, max = 2}
     local cons = Trie.Consumer.new{
         n = prio.max,
@@ -4171,13 +4173,16 @@ function normalModeSingle()
             elseif kind == prio.motion then
                 performMotion(action[0], action[1])
             end
+            currentMode = prevMode
             return true
         else
             -- Drop one key
             pullTypeahead()
+            currentMode = prevMode
             return false
         end
     else
+        currentMode = prevMode
         return false
     end
 end
