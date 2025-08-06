@@ -149,6 +149,7 @@ local keyboards = {}
 local useTmKeyboards = false
 local actionsTrie = Trie.new()  -- Generic Normal-mode handlers
 local motionsTrie = Trie.new()  -- Normal & operator-pending -mode 
+local textObjectsTrie = Trie.new()  -- Only operator-pending-mode 
 local keyNamesTranslation = {
     backspace = "bs",
     enter = "cr",
@@ -312,6 +313,17 @@ end
 local function registerMotionMulti(components, getOptsCb)
     for _, lst in itertools.product(components) do
         registerMotion(table.concat(lst), getOptsCb(lst))
+    end
+end
+
+local function registerTextObject(seq, opts, cb)
+    local key = keyseq.parseKeySequence(seq, keyNormalisation, modifierOrder)
+    textObjectsTrie:put(key, {cb, opts or {}})
+end
+
+local function registerTextObjectMulti(components, getOptsCb)
+    for _, lst in itertools.product(components) do
+        registerTextObject(table.concat(lst), getOptsCb(lst))
     end
 end
 
@@ -741,9 +753,10 @@ local function pullTextObject(opts)
     opts.y = opts.y or currCursorY + currFileOffset
     opts.initialX = opts.initialX or opts.x
     opts.initialY = opts.initialY or opts.y
-    local prio = {motion = 1, max = 1}
+    local prio = {textObject = 2, motion = 1, max = 2}
     local cons = Trie.Consumer.new{
         n = prio.max,
+        [prio.textObject] = textObjectsTrie,
         [prio.motion] = motionsTrie,
     }
     local countMultiplier = repeatCount1
@@ -782,7 +795,7 @@ local function pullTextObject(opts)
             for _ = 1, len do
                 pullTypeahead()
             end
-            if kind == prio.motion then
+            if kind == prio.textObject or kind == prio.motion then
                 if entry[2] then
                     itertools.update(opts, entry[2])
                 end
@@ -3384,21 +3397,6 @@ registerAction("y", function()
     local dy = currCursorY - prevCurY
     drawFile(dy < -1 or dy > 1)
 end)
-registerAction("yiw", function()
-                    local word,beg,ed = str.wordOfPos(filelines[currCursorY + currFileOffset], currCursorX + currXOffset)
-                    copybuffer = word
-                    copytype = "text"
-                end)
-registerAction("yaw", function()
-                    local word,beg,ed = str.wordOfPos(filelines[currCursorY + currFileOffset], currCursorX + currXOffset)
-                    copybuffer = word
-                    if ed ~= #filelines[currCursorY + currFileOffset] then
-                        copybuffer = copybuffer .. " "
-                    elseif beg ~= 1 then
-                        copybuffer = " " .. copybuffer
-                    end
-                    copytype = "text"
-                end)
 registerAction("y$", function()
                 copybuffer = string.sub(filelines[currCursorY + currFileOffset], currCursorX + currXOffset, #filelines[currCursorY + currFileOffset])
                 copytype = "text"
@@ -3549,6 +3547,9 @@ function yankTextObject(to, jumpBeg)
             table.insert(copybuffer, #copybuffer + 1, filelines[i])
         end
         copytype = "linetable"
+        if jumpBeg then
+            currCursorY = begY
+        end
     else
         if to.exclusive then
             edX = edX - 1
@@ -3585,30 +3586,48 @@ function yankTextObject(to, jumpBeg)
     end
     return true
 end
-registerAction("diw", function() resetLastSearch() local word, beg, ed
-                local word,beg,ed
-                    word,beg,ed = str.wordOfPos(filelines[currCursorY + currFileOffset], currCursorX + currXOffset)
-                    copybuffer = word
-                    copytype = "text"
-                    filelines[currCursorY + currFileOffset] = string.sub(filelines[currCursorY + currFileOffset], 1, beg - 1) .. string.sub(filelines[currCursorY + currFileOffset], ed + 1, #filelines[currCursorY + currFileOffset])
-                    fileContents[currfile]["unsavedchanges"] = true
-                    currCursorX = beg - 1
-                afterDelete() end)
-registerAction("daw", function() resetLastSearch()
-                    local word,beg,ed = str.wordOfPos(filelines[currCursorY + currFileOffset], currCursorX + currXOffset)
-                    copybuffer = word
-                    if ed ~= #filelines[currCursorY + currFileOffset] then
-                        copybuffer = copybuffer .. " "
-                        ed = ed + 1
-                    elseif beg ~= 1 then
-                        copybuffer = " " .. copybuffer
-                        beg = beg - 1
-                    end
-                    copytype = "text"
-                    currCursorX = beg - 1
-                    filelines[currCursorY + currFileOffset] = string.sub(filelines[currCursorY + currFileOffset], 1, beg - 1) .. string.sub(filelines[currCursorY + currFileOffset], ed + 1, #filelines[currCursorY + currFileOffset])
-                    fileContents[currfile]["unsavedchanges"] = true
-                afterDelete() end)
+registerTextObjectMulti({{"i", "a"}, {"w", "W"}}, function(lst)
+    local extendSpaces = lst[1] == "a"
+    local nopunc = lst[2] == "w"
+    return {exclusive = false, linewise = false}, (function(opts)
+        -- Currently without repetition/extension
+        opts.initialX = opts.initialX or opts.x
+        opts.initialY = opts.initialY or opts.y
+        local line = filelines[opts.y]
+        local word, beg, ed = str.wordOfPos(line, opts.x, nopunc)
+        if extendSpaces then
+            local extLeft, extRight = 0, 0
+            local _, len = line:sub(ed + 1):find("^[ \x09]+")
+            if len then
+                extRight = len
+            else
+                local matchBeg, matchEd = line:sub(1, beg - 1):find("[ \x09]+$")
+                if matchBeg then
+                    extLeft = matchEd - matchBeg + 1
+                end
+            end
+            beg = beg - extLeft
+            ed = ed + extRight
+        end
+        local backward = opts.y < opts.initialY or opts.y == opts.initialY and opts.x < opts.initialX
+        if backward then
+            if opts.x > beg then
+                opts.x = beg
+            end
+            if opts.initialY == opts.y and opts.initialX < ed then
+                opts.initialX = ed
+            end
+        else
+            if opts.x < ed then
+                opts.x = ed
+            end
+            if opts.initialY == opts.y and opts.initialX > beg then
+                opts.initialX = beg
+            end
+        end
+        return opts
+    end)
+end)
 registerAction("d$", function() resetLastSearch()
                 copybuffer = string.sub(filelines[currCursorY + currFileOffset], currCursorX + currXOffset, #filelines[currCursorY + currFileOffset])
                 copytype = "text"
@@ -4000,20 +4019,6 @@ registerAction("c$", function() resetLastSearch()
                 fileContents[currfile]["unsavedchanges"] = true
                 insertMode()
             end)
-registerAction("ciw", function() resetLastSearch()
-                    local word,beg,ed = str.wordOfPos(filelines[currCursorY + currFileOffset], currCursorX + currXOffset)
-                    filelines[currCursorY + currFileOffset] = string.sub(filelines[currCursorY + currFileOffset], 1, beg - 1) .. string.sub(filelines[currCursorY + currFileOffset], ed + 1, #filelines[currCursorY + currFileOffset])
-                    currCursorX = beg
-                    currXOffset = 0
-                    while currCursorX + lineoffset > wid do
-                        currCursorX = currCursorX - 1
-                        currXOffset = currXOffset + 1
-                    end
-                    recalcMLCs()
-                    drawFile()
-                    fileContents[currfile]["unsavedchanges"] = true
-                    insertMode()
-                end)
 registerAction("c", function()
     resetLastSearch()
     local to = pullTextObject()
