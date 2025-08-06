@@ -736,8 +736,7 @@ end
 local function pullTextObject(opts)
     local prevMode = currentMode
     currentMode = "o"
-    opts = opts and itertools.collect(pairs(opts)) or {}
-    opts.wantX = opts.wantX or oldx
+    opts = opts and itertools.collect(pairs(opts)) or {wantX = oldx}
     opts.x = opts.x or currCursorX + currXOffset
     opts.y = opts.y or currCursorY + currFileOffset
     opts.initialX = opts.initialX or opts.x
@@ -798,6 +797,30 @@ local function pullTextObject(opts)
         opts = nil  -- no text object returned => operator should terminate
     end
     currentMode = prevMode
+    return opts
+end
+
+-- Helper text objects
+local function textObjectLine(opts)
+    opts = opts and itertools.collect(pairs(opts)) or {wantX = oldx}
+    opts.x = opts.x or currCursorX + currXOffset
+    opts.y = opts.y or currCursorY + currFileOffset
+    opts.initialX = opts.initialX or opts.x
+    opts.initialY = opts.initialY or opts.y
+
+    opts.linewise = true
+    return opts
+end
+
+local function textObjectEOL(opts)
+    opts = opts and itertools.collect(pairs(opts)) or {wantX = oldx}
+    opts.x = opts.x or currCursorX + currXOffset
+    opts.y = opts.y or currCursorY + currFileOffset
+    opts.initialX = opts.initialX or opts.x
+    opts.initialY = opts.initialY or opts.y
+
+    opts.wantX = 999999999
+    opts.x = #filelines[opts.y]
     return opts
 end
 
@@ -1277,16 +1300,18 @@ local function scrollWindowY(amount, currSOL)
 end
 
 local function performMotion(opts, cb)
+    resetLastSearch()
     opts = opts and itertools.collect(pairs(opts)) or {}
     opts.wantX = oldx
     opts.x = currCursorX + currXOffset
     opts.y = currCursorY + currFileOffset
     opts = cb(opts) or opts
-    oldx = opts.wantX
+    local dy = opts.y - currFileOffset - currCursorY
+    oldx = opts.wantX or nil
     currCursorX = opts.x - currXOffset
     currCursorY = opts.y - currFileOffset
     cursorIntoFile()
-    drawFile(scrollToCursor())
+    drawFile(scrollToCursor() or dy > 1 or dy < -1)
 end
 
 --Recalculate where multi-line comments are, based on position in file
@@ -3106,133 +3131,123 @@ registerAction("I", function()
             drawFile(true)
             insertMode()
         end)
-registerAction("h", function()
-    resetLastSearch()
-    if repeatCount0 > 0 then
-        -- TODO figure out why does the original repetition code contain this
-        currCursorX = currCursorX - repeatCount0 + 1
-    else
-        currCursorX = currCursorX - 1
-    end
-    if currCursorX + currXOffset < 1 then
-        currCursorX = 1
-        currXOffset = 0
-    else
-        while currCursorX < 1 do
-            currCursorX = currCursorX + 1
-            currXOffset = currXOffset - 1
+registerMotionMulti({{"h", "<left>"}}, function()
+    return {exclusive = true}, (function(opts)
+        opts.x = opts.x - repeatCount1
+        if opts.x < 1 then
+            opts.x = 1
         end
-    end
-    drawFile()
-    oldx = nil
+        opts.wantX = nil
+        return opts
+    end)
 end)
-registerAction("j", function()
-    resetLastSearch()
-    if oldx ~= nil then
-        currCursorX = oldx - currXOffset
-    else
-        oldx = currCursorX + currXOffset
-    end
-    currCursorY = currCursorY + repeatCount1
-    if currCursorY + currFileOffset > #filelines then
-        currCursorY = #filelines
-        currFileOffset = 0
-    end
-    if currCursorX + currXOffset > #(filelines[currCursorY + currFileOffset]) + 1 then
-        if filelines[currCursorY + currFileOffset] ~= "" then
-            currCursorX = #(filelines[currCursorY + currFileOffset]) + 1 - currXOffset
+registerMotionMulti({{"j", "<down>"}}, function()
+    return {}, (function(opts)
+        if opts.linewise == nil then  -- preserve false
+            opts.linewise = true
+        end
+        if opts.wantX ~= nil then
+            opts.x = opts.wantX
         else
-            currCursorX = 1
-            currXOffset = 0
+            opts.wantX = opts.x
         end
-    end
-    if currCursorX < 1 then
-        while currCursorX < 1 do
-            currXOffset = currXOffset - 1
-            currCursorX = currCursorX + 1
+        opts.y = opts.y + repeatCount1
+        if opts.y > #filelines then
+            opts.y = #filelines
         end
-    elseif currCursorX + lineoffset > wid then
-        while currCursorX + lineoffset > wid do
-            currXOffset = currXOffset + 1
-            currCursorX = currCursorX - 1
+        local line = filelines[opts.y]
+        if opts.x > #line + 1 then
+            opts.x = #line + 1
         end
-    end
-    while currCursorY > hig - 1 do
-        currCursorY = currCursorY - 1
-        currFileOffset = currFileOffset + 1
-    end
-    drawFile(repeatCount1 > 1)  -- Force redraw to avoid phantom cursor
+        return opts
+    end)
 end)
-registerAction("k", function()
-    resetLastSearch()
-    if oldx ~= nil then
-        currCursorX = oldx - currXOffset
-    else
-        oldx = currCursorX + currXOffset
-    end
-    currCursorY = currCursorY - repeatCount1
-    if currCursorY + currFileOffset < 1 then
-        currCursorY = 1
-        currFileOffset = 0
-    end
-    if currCursorX + currXOffset > #(filelines[currCursorY + currFileOffset]) + 1 then
-        if filelines[currCursorY + currFileOffset] ~= "" then
-            currCursorX = #(filelines[currCursorY + currFileOffset]) + 1 - currXOffset
+registerMotionMulti({{"k", "<up>"}}, function()
+    return {}, (function(opts)
+        if opts.linewise == nil then  -- preserve false
+            opts.linewise = true
+        end
+        if opts.wantX ~= nil then
+            opts.x = opts.wantX
         else
-            currCursorX = 1
-            currXOffset = 0
+            opts.wantX = opts.x
         end
-    end
-    if currCursorX < 1 then
-        while currCursorX < 1 do
-            currXOffset = currXOffset - 1
-            currCursorX = currCursorX + 1
+        opts.y = opts.y - repeatCount1
+        if opts.y < 1 then
+            opts.y = 1
         end
-    elseif currCursorX + lineoffset > wid then
-        while currCursorX + lineoffset > wid do
-            currXOffset = currXOffset + 1
-            currCursorX = currCursorX - 1
+        local line = filelines[opts.y]
+        if opts.x > #line + 1 then
+            opts.x = #line + 1
         end
-    end
-    while currCursorY < 1 do
-        currCursorY = currCursorY + 1
-        currFileOffset = currFileOffset - 1
-    end
-    while currFileOffset < 0 do
-        currFileOffset = currFileOffset + 1
-    end
-    drawFile(repeatCount1 > 1)  -- Force redraw to avoid phantom cursor
+        return opts
+    end)
 end)
-registerAction("l", function()
-    resetLastSearch()
-    currCursorX = currCursorX + repeatCount1
-    local line = filelines[currCursorY + currFileOffset]
-    if line ~= nil then
-        if currCursorX + currXOffset > #line then
-            currXOffset = 0
-            currCursorX = #filelines[currCursorY + currFileOffset] + 1
+registerMotionMulti({{"l", "<right>"}}, function()
+    return {exclusive = true}, (function(opts)
+        opts.x = opts.x + repeatCount1
+        if opts.x < 1 then
+            opts.x = 1
         end
-        if currCursorX + lineoffset > wid then
-            local delta = wid - currCursorX - lineoffset
-            currCursorX = currCursorX + delta
-            currXOffset = currXOffset - delta
-        end
-        drawFile()
-    end
-    oldx = nil
+        local line = filelines[opts.y]
+        opts.wantX = nil
+        return opts
+    end)
 end)
-registerAction("H", function()
-            currCursorY = 1
-            drawFile(true)
-        end)
-registerAction("M", function()
-            currCursorY = math.floor((hig - 1) / 2)
-            drawFile(true)
-        end)
-registerAction("L", function()
-            currCursorY = hig - 1
-            drawFile(true)
-        end)
+registerMotion("H", {}, function(opts)
+    if opts.linewise == nil then
+        opts.linewise = true
+    end
+    opts.y = currFileOffset + 1
+    if opts.y < 1 then
+        opts.y = 1
+    elseif opts.y > #filelines then
+        opts.y = #filelines
+    end
+    local line = filelines[opts.y]
+    opts.x = line:find("[^ \x09]") or #line
+    if opts.x < 1 then
+        opts.x = 1
+    end
+    opts.wantX = nil
+    return opts
+end)
+registerMotion("M", {}, function(opts)
+    if opts.linewise == nil then
+        opts.linewise = true
+    end
+    opts.y = currFileOffset + math.floor((hig - 1) / 2)
+    if opts.y < 1 then
+        opts.y = 1
+    elseif opts.y > #filelines then
+        opts.y = #filelines
+    end
+    local line = filelines[opts.y]
+    opts.x = line:find("[^ \x09]") or #line
+    if opts.x < 1 then
+        opts.x = 1
+    end
+    opts.wantX = nil
+    return opts
+end)
+registerMotion("L", {}, function(opts)
+    if opts.linewise == nil then
+        opts.linewise = true
+    end
+    opts.y = currFileOffset + (hig - 1)
+    if opts.y < 1 then
+        opts.y = 1
+    elseif opts.y > #filelines then
+        opts.y = #filelines
+    end
+    local line = filelines[opts.y]
+    opts.x = line:find("[^ \x09]") or #line
+    if opts.x < 1 then
+        opts.x = 1
+    end
+    opts.wantX = nil
+    return opts
+end)
 registerAction("r", function()
             local chr = pullTypeaheadCharMode("i")
             filelines[currCursorY + currFileOffset] = string.sub(filelines[currCursorY + currFileOffset], 1, currCursorX + currXOffset - 1) .. chr .. string.sub(filelines[currCursorY + currFileOffset], currCursorX + currXOffset + 1, #(filelines[currCursorY + currFileOffset]))
@@ -3608,26 +3623,12 @@ registerAction("P", function()
             drawFile(true)
             fileContents[currfile]["unsavedchanges"] = true
         end)
-registerAction("$", function()
-            lastSearchPos = nil
-            lastSearchLine = nil
-            oldx = 999999999
-            currCursorX = #filelines[currCursorY + currFileOffset]
-            currXOffset = 0
-            while currCursorX + lineoffset > wid do
-                currCursorX = currCursorX - 1
-                currXOffset = currXOffset + 1
-            end
-            drawFile()
-        end)
-registerAction("0", function()
-            lastSearchPos = nil
-            lastSearchLine = nil
-            currCursorX = 1
-            currXOffset = 0
-            oldx = nil
-            drawFile()
-        end)
+registerMotion("$", {exclusive = false}, textObjectEOL)
+registerMotion("0", {exclusive = true}, function(opts)
+    opts.wantX = nil
+    opts.x = 1
+    return opts
+end)
 registerAction("gJ", function() resetLastSearch()
                 filelines[currCursorY + currFileOffset] = filelines[currCursorY + currFileOffset] .. filelines[currCursorY + currFileOffset + 1]
                 table.remove(filelines, currCursorY + currFileOffset + 1)
@@ -3635,60 +3636,49 @@ registerAction("gJ", function() resetLastSearch()
                 drawFile(true)
                 fileContents[currfile]["unsavedchanges"] = true
             end)
-registerAction("gg", function() resetLastSearch()
-                currCursorY = repeatCount1
-                currFileOffset = 0
-                currCursorX = 1
-                currXOffset = 0
-                while currCursorY > hig - 1 do
-                    currCursorY = currCursorY - 1
-                    currFileOffset = currFileOffset + 1
-                end
-                drawFile()
-            end)
-registerActionMulti({{"g"}, {"e", "E"}}, function(lst)
+registerMotion("gg", {}, function(opts)
+    if opts.linewise == nil then  -- preserve false
+        opts.linewise = true
+    end
+    opts.y = repeatCount1
+    if opts.y > #filelines then
+        opts.y = #filelines
+    end
+    local line = filelines[opts.y]
+    opts.x = line:find("[^ \x09]") or #line
+    if opts.x < 1 then
+        opts.x = 1
+    end
+    opts.wantX = nil
+    return opts
+end)
+registerMotionMulti({{"g"}, {"e", "E"}}, function(lst)
     local c = lst[2]
-    return (function() resetLastSearch()
-            for i = 1, repeatCount1, 1 do
-                local begs = str.wordEnds(filelines[currCursorY + currFileOffset], not string.match(c, "%u"))
-                if begs[#begs] then
-                    if currCursorX + currXOffset > begs[1] then
-                        currCursorX = currCursorX - 1
-                        while not tab.find(begs, currCursorX + currXOffset) do
-                            currCursorX = currCursorX - 1
-                        end
-                        while currCursorX < 1 do
-                            currCursorX = currCursorX + 1
-                            currXOffset = currXOffset - 1
-                        end
-                        oldx = currCursorX + currXOffset
+    return {exclusive = false}, (function(opts)
+        for i = 1, repeatCount1, 1 do
+            local begs = str.wordEnds(filelines[opts.y], not string.match(c, "%u"))
+            if begs[#begs] then
+                if opts.x > begs[1] then
+                    opts.x = opts.x - 1
+                    while not tab.find(begs, opts.x) do
+                        opts.x = opts.x - 1
                     end
+                    opts.wantX = opts.x
                 end
             end
-            drawFile()
-        end)
+        end
+        return opts
     end)
-registerAction("g_", function() resetLastSearch()
-                currCursorX = #filelines[currCursorY + currFileOffset]
-                currXOffset = 0
-                local i = currCursorX
-                while string.sub(filelines[currCursorY + currFileOffset], i, i) == " " do
-                    i = i - 1
-                end
-                currCursorX = i
-                if currCursorX + lineoffset > wid then
-                    while currCursorX + lineoffset > wid do
-                        currCursorX = currCursorX - 1
-                        currXOffset = currXOffset + 1
-                    end
-                elseif currCursorX < 1 then
-                    while currCursorX < 1 do
-                        currCursorX = currCursorX + 1
-                        currXOffset = currXOffset - 1
-                    end
-                end
-                drawFile()
-            end)
+end)
+registerMotion("g_", {}, function(opts)
+    local line = filelines[opts.y]
+    local lastNonBlank = (line:find("[ \x09]*$") or #line + 1) - 1
+    if lastNonBlank > 0 then
+        opts.x = lastNonBlank
+    else
+        opts.x = 1
+    end
+end)
 registerAction("gt", function()
     resetLastSearch()
     if repeatCount0 > 0 then
@@ -3701,26 +3691,29 @@ registerAction("gT", function()
     resetLastSearch()
     switchToFile(currfile - 1)
 end)
-registerAction("G", function()
-    resetLastSearch()
+registerMotion("G", {}, function(opts)
+    if opts.linewise == nil then  -- preserve false
+        opts.linewise = true
+    end
     if repeatCount0 > 0 then
-        currCursorY = repeatCount0
+        opts.y = repeatCount0
     else
-        currCursorY = #filelines
+        opts.y = #filelines
     end
-    currFileOffset = 0
-    currCursorX = 1
-    currXOffset = 0
-    while currCursorY > hig - 1 do
-        currCursorY = currCursorY - 1
-        currFileOffset = currFileOffset + 1
+    if opts.y > #filelines then
+        opts.y = #filelines
     end
-    drawFile()
+    local line = filelines[opts.y]
+    opts.x = line:find("[^ \x09]") or #line
+    if opts.x < 1 then
+        opts.x = 1
+    end
+    opts.wantX = nil
+    return opts
 end)
 registerMotionMulti({{"w", "W"}}, function(lst)
     local var1 = lst[1]
     return {exclusive = true}, (function(opts)
-        resetLastSearch() -- local wantX = oldx
         for i = 1, repeatCount1, 1 do
             local begs = str.wordBeginnings(filelines[opts.y], not string.match(var1, "%u"))
             if begs[#begs] then
@@ -3736,95 +3729,71 @@ registerMotionMulti({{"w", "W"}}, function(lst)
         return opts
     end)
 end)
-registerActionMulti({{"e", "E"}}, function(lst)
+registerMotionMulti({{"e", "E"}}, function(lst)
     local var1 = lst[1]
-    return (function ()
-        resetLastSearch()
+    return {exclusive = false}, (function(opts)
         for i = 1, repeatCount1, 1 do
-            local begs = str.wordEnds(filelines[currCursorY + currFileOffset], not string.match(var1, "%u"))
+            local begs = str.wordEnds(filelines[opts.y], not string.match(var1, "%u"))
             if begs[#begs] then
-                if currCursorX + currXOffset < begs[#begs] then
-                    currCursorX = currCursorX + 1
-                    while not tab.find(begs, currCursorX + currXOffset) do
-                        currCursorX = currCursorX + 1
+                if opts.x < begs[#begs] then
+                    opts.x = opts.x + 1
+                    while not tab.find(begs, opts.x) do
+                        opts.x = opts.x + 1
                     end
-                    while currCursorX + lineoffset > wid do
-                        currCursorX = currCursorX - 1
-                        currXOffset = currXOffset + 1
-                    end
-                    oldx = currCursorX + currXOffset
-                    drawFile()
+                    opts.wantX = opts.x
                 end
             end
         end
+        return opts
     end)
 end)
-registerActionMulti({{"b", "B"}}, function(lst)
+registerMotionMulti({{"b", "B"}}, function(lst)
     local var1 = lst[1]
-    return (function ()
-        resetLastSearch()
+    return {exclusive = true}, (function (opts)
         for i = 1, repeatCount1, 1 do
-            local begs = str.wordBeginnings(filelines[currCursorY + currFileOffset], not string.match(var1, "%u"))
+            local begs = str.wordBeginnings(filelines[opts.y], not string.match(var1, "%u"))
             if begs[1] then
-                if currCursorX + currXOffset > begs[1] then
-                    currCursorX = currCursorX - 1
-                    while not tab.find(begs, currCursorX + currXOffset) do
-                        currCursorX = currCursorX - 1
+                if opts.x > begs[1] then
+                    opts.x = opts.x - 1
+                    while not tab.find(begs, opts.x) do
+                        opts.x = opts.x - 1
                     end
-                    while currCursorX < 1 do
-                        currCursorX = currCursorX + 1
-                        currXOffset = currXOffset - 1
-                    end
-                    oldx = currCursorX + currXOffset
+                    opts.wantX = opts.x
                 end
             end
         end
-        drawFile()
+        return opts
     end)
 end)
-registerAction("^", function()
-            lastSearchPos = nil
-            lastSearchLine = nil
-            currCursorX = 1
-            currXOffset = 0
-            oldx = nil
-            local i = currCursorX
-            while string.sub(filelines[currCursorY + currFileOffset], i, i) == " " and i < #filelines[currCursorY + currFileOffset] do
-                i = i + 1
-            end
-            currCursorX = i
-            while currCursorX + lineoffset > wid do
-                currCursorX = currCursorX - 1
-                currXOffset = currXOffset + 1
-            end
-            drawFile()
-        end)
-registerActionMulti({{"f", "t"}}, function(lst)
+registerMotion("^", {exclusive = true}, function(opts)
+    opts.wantX = nil
+    local line = filelines[opts.y]
+    opts.x = line:find("[^ \x09]") or #line
+    if opts.x < 1 then
+        opts.x = 1
+    end
+    return opts
+end)
+registerMotionMulti({{"f", "t"}}, function(lst)
     local var1 = lst[1]
-    return (function ()
-        resetLastSearch()
+    return {exclusive = true}, (function (opts)
         local c = pullTypeaheadCharMode("i")
-        local idx = str.indicesOfLetter(filelines[currCursorY + currFileOffset], c)
+        local idx = str.indicesOfLetter(filelines[opts.y], c)
         for i = 1, repeatCount1, 1 do
             if #idx > 0 then
-                if currCursorX + currFileOffset < idx[#idx] - jumpoffset then
-                    local oldcursor = currCursorX
-                    currCursorX = currCursorX + (1 + jumpoffset)
-                    oldx = nil
-                    while not tab.find(idx, currCursorX + currXOffset) and currCursorX + currXOffset < #filelines[currCursorY + currFileOffset] do
-                        currCursorX = currCursorX + 1
+                if opts.x < idx[#idx] - jumpoffset then
+                    local oldcursor = opts.x
+                    opts.x = opts.x + (1 + jumpoffset)
+                    opts.wantX = nil
+                    while not tab.find(idx, opts.x) and opts.x < #filelines[opts.y] do
+                        opts.x = opts.x + 1
                     end
-                    if not tab.find(idx, currCursorX + currXOffset) then
-                        currCursorX = oldcursor
+                    if not tab.find(idx, opts.x) then
+                        opts.x = oldcursor
                     end
                     if var1 == "t" then
-                        currCursorX = currCursorX - 1
+                        opts.x = opts.x - 1
                     end
-                    while currCursorX + lineoffset > wid do
-                        currCursorX = currCursorX - 1
-                        currXOffset = currXOffset + 1
-                    end
-                    drawFile()
                     jumpbuffer = {var1, c}
                     if var1 == "t" then
                         jumpoffset = 1
@@ -3834,40 +3803,37 @@ registerActionMulti({{"f", "t"}}, function(lst)
                 end
             end
         end
+        return opts
     end)
 end)
-registerActionMulti({{"F", "T"}}, function(lst)
+registerMotionMulti({{"F", "T"}}, function(lst)
     local var1 = lst[1]
-    return (function ()
-            resetLastSearch()
-            local c = pullTypeaheadCharMode("i")
-            local idx = str.indicesOfLetter(filelines[currCursorY + currFileOffset], c)
-            -- TODO Figure out if the lack of repetition is intentional
-            if #idx > 0 then
-                if currCursorX + currFileOffset > idx[1] + jumpoffset then
-                    currCursorX = currCursorX - (1 + jumpoffset)
-                    oldx = nil
-                    while not tab.find(idx, currCursorX + currXOffset) and currCursorX > 1 do
-                        currCursorX = currCursorX - 1
-                    end
-                    if var1 == "T" then
-                        currCursorX = currCursorX + 1
-                    end
-                    while currCursorX < 1 do
-                        currCursorX = currCursorX + 1
-                        currXOffset = currXOffset - 1
-                    end
-                    drawFile()
-                    jumpbuffer = {var1, c}
-                    if var1 == "T" then
-                        jumpoffset = 1
-                    else
-                        jumpoffset = 0
-                    end
+    return {exclusive = true}, (function (opts)
+        local c = pullTypeaheadCharMode("i")
+        local idx = str.indicesOfLetter(filelines[opts.y], c)
+        -- TODO Figure out if the lack of repetition is intentional
+        if #idx > 0 then
+            if opts.x > idx[1] + jumpoffset then
+                opts.x = opts.x - (1 + jumpoffset)
+                opts.wantX = nil
+                while not tab.find(idx, opts.x) and opts.x > 1 do
+                    opts.x = opts.x - 1
+                end
+                if var1 == "T" then
+                    opts.x = opts.x + 1
+                end
+                jumpbuffer = {var1, c}
+                if var1 == "T" then
+                    jumpoffset = 1
+                else
+                    jumpoffset = 0
                 end
             end
-        end)
+        end
+        return opts
     end)
+end)
+--[[ FIXME why does it have a second implementation?
 registerActionMulti({{"F", "T"}}, function(lst)
     local var1 = lst[1]
     return (function ()
@@ -3928,6 +3894,7 @@ registerActionMulti({{"F", "T"}}, function(lst)
             end
         end)
     end)
+]]
 registerAction("cc", function() resetLastSearch()
                 filelines[currCursorY + currFileOffset] = ""
                 currCursorX = 1
@@ -3996,75 +3963,56 @@ registerAction("S", function()
             fileContents[currfile]["unsavedchanges"] = true
             insertMode()
         end)
-registerAction("%", function()
-            lastSearchPos = nil
-            lastSearchLine = nil
-            local startpos = {currCursorX, currXOffset, currCursorY, currFileOffset}
-            local startbracket = string.sub(filelines[currCursorY + currFileOffset], currCursorX + currXOffset, currCursorX + currXOffset)
-            local endbracket = ""
-            if startbracket == "(" then
-                endbracket = ")"
-            elseif startbracket == "{" then
-                endbracket = "}"
-            elseif startbracket == "[" then
-                endbracket = "]"
-            else
-                endbracket = nil
-            end
-            if endbracket then
-                local extrabrackets = 0
-                local continuefor = true
-                currCursorX = currCursorX + 1
-                setcolors(colors.black, colors.white)
-                for i=currCursorY + currFileOffset,#filelines,1 do
-                    if continuefor then
-                        while currCursorX + currXOffset <= #filelines[currCursorY + currFileOffset] do
-                            if string.sub(filelines[currCursorY + currFileOffset], currCursorX + currXOffset, currCursorX + currXOffset) == startbracket then
-                                extrabrackets = extrabrackets + 1
-                            elseif string.sub(filelines[currCursorY + currFileOffset], currCursorX + currXOffset, currCursorX + currXOffset) == endbracket then
-                                if extrabrackets > 0 then
-                                    extrabrackets = extrabrackets - 1
-                                else
-                                    extrabrackets = extrabrackets - 1
-                                end
-                            end
-                            currCursorX = currCursorX + 1
-                        end
-                        if (string.sub(filelines[currCursorY + currFileOffset], currCursorX + currXOffset, currCursorX + currXOffset) == endbracket and extrabrackets == 0) or extrabrackets < 0 then
-                            if currCursorX > 1 then
-                                currCursorX = currCursorX - 1
-                            end
-                            continuefor = false
+registerMotion("%", {exclusive = false}, function(opts)
+    local startpos = {opts.x, opts.y}
+    local startbracket = string.sub(filelines[opts.y], opts.x, opts.x)
+    local endbracket = ""
+    if startbracket == "(" then
+        endbracket = ")"
+    elseif startbracket == "{" then
+        endbracket = "}"
+    elseif startbracket == "[" then
+        endbracket = "]"
+    else
+        endbracket = nil
+    end
+    if endbracket then
+        local extrabrackets = 0
+        local continuefor = true
+        opts.x = opts.x + 1
+        for i = opts.y, #filelines, 1 do
+            if continuefor then
+                while opts.x <= #filelines[opts.y] do
+                    if string.sub(filelines[opts.y], opts.x, opts.x) == startbracket then
+                        extrabrackets = extrabrackets + 1
+                    elseif string.sub(filelines[opts.y], opts.x, opts.x) == endbracket then
+                        if extrabrackets > 0 then
+                            extrabrackets = extrabrackets - 1
                         else
-                            currCursorX = 1
-                            currXOffset = 0
-                            if #filelines > 1 then
-                                currCursorY = currCursorY + 1
-                            end
+                            extrabrackets = extrabrackets - 1
                         end
+                    end
+                    opts.x = opts.x + 1
+                end
+                if (string.sub(filelines[opts.y], opts.x, opts.x) == endbracket and extrabrackets == 0) or extrabrackets < 0 then
+                    if opts.x > 1 then
+                        opts.x = opts.x - 1
+                    end
+                    continuefor = false
+                else
+                    opts.x = 1
+                    if #filelines > 1 then
+                        opts.y = opts.y + 1
                     end
                 end
             end
-            while currCursorX < 1 do
-                currCursorX = currCursorX + 1
-                currXOffset = currXOffset - 1
-            end
-            while currCursorX > wid - lineoffset do
-                currCursorX = currCursorX - 1
-                currXOffset = currXOffset + 1
-            end
-            while currCursorY > hig - 1 do
-                currCursorY = currCursorY - 1
-                currFileOffset = currFileOffset + 1
-            end
-            drawFile(true)
-            if not string.sub(filelines[currCursorY + currFileOffset], currCursorX + currXOffset, currCursorX + currXOffset) == endbracket then
-                currCursorX = startpos[1]
-                currXOffset = startpos[2]
-                currCursorY = startpos[3]
-                currFileOffset = startpos[4]
-            end
-        end)
+        end
+    end
+    if not string.sub(filelines[opts.y], opts.x, opts.x) == endbracket then
+        opts.x = startpos[1]
+        opts.y = startpos[2]
+    end
+end)
 registerAction("/", function()
             search("forward")
         end)
@@ -4085,11 +4033,6 @@ registerAction("#", function()
             local currword = str.wordOfPos(filelines[currCursorY + currFileOffset], currCursorX + currXOffset, true)
             search("backward", false, currword)
         end)
--- TODO also handle repetitions
-registerAction("<left>", moveCursorLeft)
-registerAction("<right>", function() moveCursorRight(1) end)
-registerAction("<up>", moveCursorUp)
-registerAction("<down>", moveCursorDown)
 
 registerAction("<C-u>", function()
     if repeatCount0 > 0 then
@@ -4164,19 +4107,17 @@ registerAction("<pagedown>", function()
     scrollWindowY(amount, false)
 end)
 
-registerAction("<leftmouse>", function()
-    resetLastSearch()
-    currCursorX = inputProperties.mouseX - lineoffset
-    currCursorY = inputProperties.mouseY
-    if currCursorY + currFileOffset > #filelines then
-        currCursorY = #filelines - currFileOffset
+registerMotion("<leftmouse>", {exclusive = true}, function(opts)
+    opts.x = inputProperties.mouseX + currXOffset - lineoffset
+    opts.y = inputProperties.mouseY + currFileOffset
+    if opts.y > #filelines then
+        opts.y = #filelines
     end
-    local line = filelines[currCursorY + currFileOffset]
-    oldx = currCursorX + currXOffset
-    if line and #line < currCursorX + currXOffset then
-        currCursorX = #line - currXOffset
+    local line = filelines[opts.y]
+    opts.wantX = opts.x
+    if line and #line < opts.x then
+        opts.x = #line
     end
-    redrawTerm()
 end)
 
 registerAction(">>", function()
