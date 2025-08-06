@@ -822,6 +822,10 @@ local function textObjectLine(opts)
     opts.initialY = opts.initialY or opts.y
 
     opts.linewise = true
+    opts.y = opts.y + repeatCount1 - 1
+    if opts.y > #filelines then
+        opts.y = #filelines
+    end
     return opts
 end
 
@@ -832,6 +836,10 @@ local function textObjectEOL(opts)
     opts.initialX = opts.initialX or opts.x
     opts.initialY = opts.initialY or opts.y
 
+    opts.y = opts.y + repeatCount1 - 1
+    if opts.y > #filelines then
+        opts.y = #filelines
+    end
     opts.wantX = 999999999
     opts.x = #filelines[opts.y]
     return opts
@@ -3374,15 +3382,8 @@ registerAction("ZZ", function()
 local cutTextObject
 local yankTextObject
 registerAction("yy", function()
-    local count = #filelines - currCursorY - currFileOffset + 1
-    if count > repeatCount1 then
-        count = repeatCount1
-    end
-    copybuffer = {}
-    for i = 1, count, 1 do
-        table.insert(copybuffer, #copybuffer + 1, filelines[currCursorY + currFileOffset + i - 1])
-    end
-    copytype = "linetable"
+    resetLastSearch()
+    yankTextObject(textObjectLine())
 end)
 registerAction("y", function()
     resetLastSearch()
@@ -3397,10 +3398,10 @@ registerAction("y", function()
     local dy = currCursorY - prevCurY
     drawFile(dy < -1 or dy > 1)
 end)
-registerAction("y$", function()
-                copybuffer = string.sub(filelines[currCursorY + currFileOffset], currCursorX + currXOffset, #filelines[currCursorY + currFileOffset])
-                copytype = "text"
-            end)
+registerAction("Y", function()
+    resetLastSearch()
+    yankTextObject(textObjectEOL())  -- drop Vi compatibility
+end)
 registerAction("x", function()
     local beg = currCursorX + currXOffset
     local ed = beg + repeatCount1 - 1
@@ -3442,24 +3443,9 @@ function resetLastSearch()
             lastSearchLine = nil
         end
 local afterDelete
-registerAction("dd", function() resetLastSearch()
-    local count = #filelines - currCursorY - currFileOffset + 1
-    if count > repeatCount1 then
-        count = repeatCount1
-    end
-    copybuffer = {}
-    for i = 1, count, 1 do
-        table.insert(copybuffer, #copybuffer + 1, filelines[currCursorY + currFileOffset + i - 1])
-    end
-    copytype = "linetable"
-    for i = 1, count, 1 do
-        table.remove(filelines, currCursorY + currFileOffset)
-    end
-    if #filelines < 1 then
-        filelines[1] = ""
-    end
-    fileContents[currfile]["unsavedchanges"] = true
-    afterDelete()
+registerAction("dd", function()
+    resetLastSearch()
+    cutTextObject(textObjectLine())
 end)
 registerAction("d", function()
     resetLastSearch()
@@ -3470,7 +3456,10 @@ registerAction("d", function()
     end
     cutTextObject(to)
 end)
-function cutTextObject(to)
+function cutTextObject(to, settings)
+    settings = settings or {}
+    local addLine = settings.addLine or false
+    local onePastEOL = settings.onePastEOL or false
     local begX, begY, edX, edY = to.initialX, to.initialY, to.x, to.y
     if edY < begY or edY == begY and edX < begX then
         begX, edX = edX, begX
@@ -3485,16 +3474,28 @@ function cutTextObject(to)
         for _ = begY, edY do
             table.remove(filelines, begY)
         end
-        if #filelines < 1 then
-            filelines[1] = ""
-        end
         fileContents[currfile]["unsavedchanges"] = true
         if currCursorY + currFileOffset > begY then
             if currCursorY + currFileOffset > edY then
                 currCursorY = currCursorY - (edY - begY)
             else
-                currCursorY = begY
+                currCursorY = begY - currFileOffset
             end
+        end
+        if addLine or #filelines < 1 then
+            local i = currCursorY + currFileOffset
+            if i > #filelines + 1 then
+                i = #filelines + 1
+            elseif i < 1 then
+                i = 1
+            end
+            local newLine = ""
+            if autoindent then
+                local protoLine = filelines[i - 1] or filelines[i] or ""
+                local indentedamount = (protoLine:find("[^ \x09]") or #protoLine + 1) - 1
+                newLine = protoLine:sub(1, indentedamount)
+            end
+            table.insert(filelines, i, newLine)
         end
     else
         if to.exclusive then
@@ -3527,12 +3528,12 @@ function cutTextObject(to)
                 if currCursorX + currXOffset > edX then
                     currCursorX = currCursorX - (edX - begX + 1)
                 else
-                    currCursorX = begX
+                    currCursorX = begX - currXOffset
                 end
             end
         end
     end
-    afterDelete()
+    afterDelete({onePastEOL = onePastEOL})
     return true
 end
 function yankTextObject(to, jumpBeg)
@@ -3628,13 +3629,7 @@ registerTextObjectMulti({{"i", "a"}, {"w", "W"}}, function(lst)
         return opts
     end)
 end)
-registerAction("d$", function() resetLastSearch()
-                copybuffer = string.sub(filelines[currCursorY + currFileOffset], currCursorX + currXOffset, #filelines[currCursorY + currFileOffset])
-                copytype = "text"
-                filelines[currCursorY + currFileOffset] = string.sub(filelines[currCursorY + currFileOffset], 1, currCursorX + currXOffset - 1)
-                fileContents[currfile]["unsavedchanges"] = true
-            afterDelete() end)
-function afterDelete()
+function afterDelete(settings)
             while currCursorY + currFileOffset > #filelines do
                 currCursorY = currCursorY - 1
                 if currCursorY < 1 then
@@ -3644,7 +3639,11 @@ function afterDelete()
                     end
                 end
             end
-            while currCursorX + currXOffset > #filelines[currCursorY + currFileOffset] do
+            local lineLength = #filelines[currCursorY + currFileOffset]
+            if settings.onePastEOL then
+                lineLength = lineLength + 1
+            end
+            while currCursorX + currXOffset > lineLength do
                 currCursorX = currCursorX - 1
                 if currCursorX < 1 then
                     while currCursorX < 1 do
@@ -3657,15 +3656,9 @@ function afterDelete()
             drawFile(true)
         end
 registerAction("D", function()
-            lastSearchPos = nil
-            lastSearchLine = nil
-            copybuffer = string.sub(filelines[currCursorY + currFileOffset], currCursorX + currXOffset, #filelines[currCursorY + currFileOffset])
-            copytype = "text"
-            filelines[currCursorY + currFileOffset] = string.sub(filelines[currCursorY + currFileOffset], 1, currCursorX + currXOffset - 1)
-            drawFile()
-            recalcMLCs()
-            fileContents[currfile]["unsavedchanges"] = true
-        end)
+    resetLastSearch()
+    cutTextObject(textObjectEOL())
+end)
 registerAction("p", function()
             lastSearchPos = nil
             lastSearchLine = nil
@@ -4003,22 +3996,12 @@ registerActionMulti({{"F", "T"}}, function(lst)
         end)
     end)
 ]]
-registerAction("cc", function() resetLastSearch()
-                filelines[currCursorY + currFileOffset] = ""
-                currCursorX = 1
-                currXOffset = 0
-                recalcMLCs()
-                drawFile()
-                fileContents[currfile]["unsavedchanges"] = true
-                insertMode()
-            end)
-registerAction("c$", function() resetLastSearch()
-                filelines[currCursorY + currFileOffset] = string.sub(filelines[currCursorY + currFileOffset], 1, currCursorX + currXOffset - 1)
-                recalcMLCs()
-                drawFile()
-                fileContents[currfile]["unsavedchanges"] = true
-                insertMode()
-            end)
+registerAction("cc", function()
+    resetLastSearch()
+    if cutTextObject(textObjectLine(), {addLine = true, onePastEOL = true}) then
+        insertMode()
+    end
+end)
 registerAction("c", function()
     resetLastSearch()
     local to = pullTextObject()
@@ -4026,17 +4009,16 @@ registerAction("c", function()
         sendMsg("No text object")
         return
     end
-    if cutTextObject(to) then
+    if cutTextObject(to, {addLine = true, onePastEOL = true}) then
         insertMode()
     end
 end)
 registerAction("C", function()
-            filelines[currCursorY + currFileOffset] = string.sub(filelines[currCursorY + currFileOffset], 1, currCursorX + currXOffset - 1)
-            recalcMLCs()
-            drawFile()
-            fileContents[currfile]["unsavedchanges"] = true
-            insertMode()
-        end)
+    resetLastSearch()
+    if cutTextObject(textObjectEOL(), {onePastEOL = true}) then
+        insertMode()
+    end
+end)
 registerAction("s", function()
             filelines[currCursorY + currFileOffset] = string.sub(filelines[currCursorY + currFileOffset], 1, currCursorX + currXOffset - 1) .. string.sub(filelines[currCursorY + currFileOffset], currCursorX + currXOffset + 1, #filelines[currCursorY + currFileOffset])
             recalcMLCs()
