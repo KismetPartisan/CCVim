@@ -144,7 +144,8 @@ local activeModifiers = {}
 local prefixedModifiers = {}
 local keyboards = {}
 local useTmKeyboards = false
-local actionsTrie = Trie.new()
+local actionsTrie = Trie.new()  -- Generic Normal-mode handlers
+local motionsTrie = Trie.new()  -- Normal & operator-pending -mode 
 local keyNamesTranslation = {
     backspace = "bs",
     enter = "cr",
@@ -297,6 +298,17 @@ end
 local function registerActionMulti(components, getCb)
     for _, lst in itertools.product(components) do
         registerAction(table.concat(lst), getCb(lst))
+    end
+end
+
+local function registerMotion(seq, opts, cb)
+    local key = keyseq.parseKeySequence(seq, keyNormalisation, modifierOrder)
+    motionsTrie:put(key, {cb, opts or {}})
+end
+
+local function registerMotionMulti(components, getOptsCb)
+    for _, lst in itertools.product(components) do
+        registerMotion(table.concat(lst), getOptsCb(lst))
     end
 end
 
@@ -986,6 +998,47 @@ local function drawFile(forcedredraw)
     end
 end
 
+local function cursorIntoFile()
+    if currCursorY + currFileOffset > #filelines then
+        currCursorY = #filelines - currFileOffset
+    end
+    if currCursorY + currFileOffset < 1 then
+        currCursorY = 1 - currFileOffset
+    end
+    local line = filelines[currCursorY + currFileOffset]
+    if line and #line < currCursorX + currXOffset then
+        currCursorX = #line - currXOffset
+    end
+    if currCursorX + currXOffset < 1 then
+        currCursorX = 1 - currXOffset
+    end
+end
+
+local function scrollToCursor()
+    local forcedredraw = false
+    if currCursorY > hig - 1 then
+        local delta = hig - 1 - currCursorY
+        currCursorY = currCursorY + delta
+        currFileOffset = currFileOffset - delta
+    end
+    if currCursorY < 1 then
+        currFileOffset = currFileOffset + currCursorY - 1
+        currCursorY = 1
+    end
+    if currCursorX + lineoffset > wid then
+        local delta = wid - currCursorX - lineoffset
+        currCursorX = currCursorX + delta
+        currXOffset = currXOffset - delta
+        forcedredraw = true
+    end
+    if currCursorX < 1 then
+        currXOffset = currXOffset + currCursorX - 1
+        currCursorX = 1
+        forcedredraw = true
+    end
+    return forcedredraw
+end
+
 local function moveCursorLeft()
     lastSearchPos = nil
     lastSearchLine = nil
@@ -1150,6 +1203,19 @@ local function scrollWindowY(amount, currSOL)
         end
     end
     drawFile(true)
+end
+
+local function performMotion(opts, cb)
+    opts = opts and itertools.collect(pairs(opts)) or {}
+    opts.wantX = oldx
+    opts.x = currCursorX + currXOffset
+    opts.y = currCursorY + currFileOffset
+    opts = cb(opts) or opts
+    oldx = opts.wantX
+    currCursorX = opts.x - currXOffset
+    currCursorY = opts.y - currFileOffset
+    cursorIntoFile()
+    drawFile(scrollToCursor())
 end
 
 --Recalculate where multi-line comments are, based on position in file
@@ -3538,27 +3604,23 @@ registerAction("G", function()
     end
     drawFile()
 end)
-registerActionMulti({{"w", "W"}}, function(lst)
+registerMotionMulti({{"w", "W"}}, function(lst)
     local var1 = lst[1]
-    return (function ()
-        resetLastSearch()
+    return {exclusive = true}, (function(opts)
+        resetLastSearch() -- local wantX = oldx
         for i = 1, repeatCount1, 1 do
-            local begs = str.wordBeginnings(filelines[currCursorY + currFileOffset], not string.match(var1, "%u"))
+            local begs = str.wordBeginnings(filelines[opts.y], not string.match(var1, "%u"))
             if begs[#begs] then
-                if currCursorX + currXOffset < begs[#begs] then
-                    currCursorX = currCursorX + 1
-                    while not tab.find(begs, currCursorX + currXOffset) do
-                        currCursorX = currCursorX + 1
+                if opts.x < begs[#begs] then
+                    opts.x = opts.x + 1
+                    while not tab.find(begs, opts.x) do
+                        opts.x = opts.x + 1
                     end
-                    while currCursorX + lineoffset > wid do
-                        currCursorX = currCursorX - 1
-                        currXOffset = currXOffset + 1
-                    end
-                    oldx = currCursorX + currXOffset
-                    drawFile()
+                    opts.wantX = opts.x
                 end
             end
         end
+        return opts
     end)
 end)
 registerActionMulti({{"e", "E"}}, function(lst)
@@ -4058,7 +4120,12 @@ registerAction("<C-S-v>", function()
 end)
 
 function normalModeSingle()
-    local cons = actionsTrie:consumer()
+    local prio = {action = 2, motion = 1, max = 2}
+    local cons = Trie.Consumer.new{
+        n = prio.max,
+        [prio.action] = actionsTrie,
+        [prio.motion] = motionsTrie,
+    }
     local i = 0
     local prefix = {}
     local countStr = pullCount()
@@ -4094,12 +4161,16 @@ function normalModeSingle()
         end
     end
     if cons ~= nil then
-        local len, action = cons:getDeepest()
+        local len, action, kind = cons:getDeepest()
         if len > 0 then
             for _ = 1, len do
                 pullTypeahead()
             end
-            action()
+            if kind == prio.action then
+                action()
+            elseif kind == prio.motion then
+                performMotion(action[0], action[1])
+            end
             return true
         else
             -- Drop one key

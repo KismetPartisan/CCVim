@@ -51,39 +51,68 @@ local Trie = {
         end
     end,
     consumer = function(self)
-        return self.Consumer.new(self)
+        return self.Consumer.new({self})
     end,
     Consumer = {
-        init = function(self, trie)
-            self._trie = trie
-            self._node = trie
+        init = function(self, tries)
+            self._roots = tries
+            self._numTries = tries.n or #tries
+            self._nodes = table.pack(table.unpack(tries))
             self._depth = 0
-            self._lastValue = self._trie._value
-            if self._lastValue == nil then
-                self._lastFound = -1
-            else
-                self._lastFound = 0
+            self._lastFound = -1
+            self._lastValue = nil
+            self._lastIndex = -1
+            for i = 1, self._numTries do
+                local t = tries[i]
+                local v = t._value
+                if v then
+                    self._lastValue = v
+                    self._lastFound = 0
+                    self._lastIndex = i
+                end
             end
         end,
         hasNext = function(self)
-            return next(self._node._next) ~= nil
+            local result = false
+            for i = 1, self._numTries do
+                local node = self._nodes[i]
+                if node ~= nil then
+                    if next(node._next) ~= nil then
+                        result = true
+                    end
+                end
+            end
+            return result
         end,
         next = function(self, e)
-            local child = self._node._next[e]
-            if child == nil then
-                return false
+            local result = false
+            local children = self._backNodes or {}  -- slightly reduce allocations
+            local depth = self._depth + 1
+            for i = 1, self._numTries do
+                local node = self._nodes[i]
+                if node ~= nil then
+                    local child = node._next[e]
+                    children[i] = child
+                    if child ~= nil then
+                        result = true
+                        local value = child._value
+                        if value ~= nil then
+                            self._lastFound = depth
+                            self._lastValue = value
+                            self._lastIndex = i
+                        end
+                    end
+                end
+                if result then
+                    self._depth = depth
+                    self._backNodes = self._nodes
+                    self._nodes = children
+                end
             end
-            self._depth = self._depth + 1
-            local value = child._value
-            if value ~= nil then
-                self._lastFound = self._depth
-                self._lastValue = value
-            end
-            self._node = child
-            return true
+            return result
         end,
         getDeepest = function(self)
-            return self._lastFound, self._lastValue
+            return self._lastFound, self._lastValue, self._lastIndex
         end,
     }
 }
