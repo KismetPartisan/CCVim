@@ -3847,10 +3847,8 @@ registerMotion("^", {exclusive = true}, function(opts)
     end
     return opts
 end)
-registerMotionMulti({{"f", "t"}}, function(lst)
-    local var1 = lst[1]
-    return {exclusive = true}, (function (opts)
-        local c = pullTypeaheadCharMode("i")
+local function textObjectCharacterFind(var1, c, opts)
+    if var1 == "f" or var1 == "t" then
         local idx = str.indicesOfLetter(filelines[opts.y], c)
         for i = 1, repeatCount1, 1 do
             if #idx > 0 then
@@ -3867,7 +3865,6 @@ registerMotionMulti({{"f", "t"}}, function(lst)
                     if var1 == "t" then
                         opts.x = opts.x - 1
                     end
-                    jumpbuffer = {var1, c}
                     if var1 == "t" then
                         jumpoffset = 1
                     else
@@ -3876,13 +3873,7 @@ registerMotionMulti({{"f", "t"}}, function(lst)
                 end
             end
         end
-        return opts
-    end)
-end)
-registerMotionMulti({{"F", "T"}}, function(lst)
-    local var1 = lst[1]
-    return {exclusive = true}, (function (opts)
-        local c = pullTypeaheadCharMode("i")
+    elseif var1 == "F" or var1 == "T" then
         local idx = str.indicesOfLetter(filelines[opts.y], c)
         -- TODO Figure out if the lack of repetition is intentional
         if #idx > 0 then
@@ -3895,7 +3886,6 @@ registerMotionMulti({{"F", "T"}}, function(lst)
                 if var1 == "T" then
                     opts.x = opts.x + 1
                 end
-                jumpbuffer = {var1, c}
                 if var1 == "T" then
                     jumpoffset = 1
                 else
@@ -3903,8 +3893,34 @@ registerMotionMulti({{"F", "T"}}, function(lst)
                 end
             end
         end
-        return opts
+    end
+    return opts
+end
+registerMotionMulti({{"f", "t", "F", "T"}}, function(lst)
+    local var1 = lst[1]
+    return {exclusive = var1 == "F" or var1 == "T"}, (function (opts)
+        local c = pullTypeaheadCharMode("i")
+        jumpbuffer = {var1, c}
+        return textObjectCharacterFind(var1, c, opts)
     end)
+end)
+registerMotion(";", {}, function(opts)
+    local kind = jumpbuffer[1]
+    if kind == "f" or kind == "t" or kind == "F" or kind == "T" then
+        return textObjectCharacterFind(kind, jumpbuffer[2], opts)
+    end
+    return opts
+end)
+registerMotion(",", {}, function(opts)
+    local kind = jumpbuffer[1]
+    if kind == nil then
+        return opts
+    end
+    kind = ({f = "F", t = "T", F = "f", T = "t"})[kind]
+    if kind then
+        return textObjectCharacterFind(kind, jumpbuffer[2], opts)
+    end
+    return opts
 end)
 --[[ FIXME why does it have a second implementation?
 registerActionMulti({{"F", "T"}}, function(lst)
