@@ -104,11 +104,11 @@ local Trie = {
                         end
                     end
                 end
-                if result then
-                    self._depth = depth
-                    self._backNodes = self._nodes
-                    self._nodes = children
-                end
+            end
+            if result then
+                self._depth = depth
+                self._backNodes = self._nodes
+                self._nodes = children
             end
             return result
         end,
