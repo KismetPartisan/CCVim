@@ -3481,6 +3481,13 @@ registerAction("d", function()
             filelines[1] = ""
         end
         fileContents[currfile]["unsavedchanges"] = true
+        if currCursorY + currFileOffset > begY then
+            if currCursorY + currFileOffset > edY then
+                currCursorY = currCursorY - (edY - begY)
+            else
+                currCursorY = begY
+            end
+        end
     else
         if to.exclusive then
             edX = edX - 1
@@ -3506,8 +3513,15 @@ registerAction("d", function()
             local line = filelines[begY]
             copybuffer = string.sub(line, begX, edX)
             copytype = "text"
-            filelines[currCursorY + currFileOffset] = string.sub(line, 1, begX - 1) .. string.sub(line, edX + 1, #line)
+            filelines[begY] = string.sub(line, 1, begX - 1) .. string.sub(line, edX + 1, #line)
             fileContents[currfile]["unsavedchanges"] = true
+            if begY == currCursorY + currFileOffset and currCursorX + currXOffset > begX then
+                if currCursorX + currXOffset > edX then
+                    currCursorX = currCursorX - (edX - begX + 1)
+                else
+                    currCursorX = begX
+                end
+            end
         end
     end
     afterDelete()
