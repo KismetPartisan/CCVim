@@ -3358,6 +3358,8 @@ registerAction("ZZ", function()
                     running = false
                 end
             end)
+local cutTextObject
+local yankTextObject
 registerAction("yy", function()
     local count = #filelines - currCursorY - currFileOffset + 1
     if count > repeatCount1 then
@@ -3369,14 +3371,19 @@ registerAction("yy", function()
     end
     copytype = "linetable"
 end)
-registerAction("yw", function()
-                local word,beg,ed = str.wordOfPos(filelines[currCursorY + currFileOffset], currCursorX + currXOffset)
-                copybuffer = word
-                if ed ~= #filelines[currCursorY + currFileOffset] then
-                    copybuffer = copybuffer .. " "
-                end
-                copytype = "text"
-            end)
+registerAction("y", function()
+    resetLastSearch()
+    local to = pullTextObject()
+    if to == nil then
+        sendMsg("No text object")
+        return
+    end
+    local prevCurY = currCursorY
+    yankTextObject(to, true)
+    scrollToCursor()
+    local dy = currCursorY - prevCurY
+    drawFile(dy < -1 or dy > 1)
+end)
 registerAction("yiw", function()
                     local word,beg,ed = str.wordOfPos(filelines[currCursorY + currFileOffset], currCursorX + currXOffset)
                     copybuffer = word
@@ -3463,6 +3470,9 @@ registerAction("d", function()
         sendMsg("No text object")
         return
     end
+    cutTextObject(to)
+end)
+function cutTextObject(to)
     local begX, begY, edX, edY = to.initialX, to.initialY, to.x, to.y
     if edY < begY or edY == begY and edX < begX then
         begX, edX = edX, begX
@@ -3493,7 +3503,7 @@ registerAction("d", function()
             edX = edX - 1
             if begY == edY and edX < begX then
                 -- push undo state
-                return
+                return true
             end
             if edX < 1 then
                 edY = edY - 1
@@ -3508,7 +3518,7 @@ registerAction("d", function()
                 _, k = os.pullEvent("key")
             end
             redrawTerm()
-            return
+            return false
         else
             local line = filelines[begY]
             copybuffer = string.sub(line, begX, edX)
@@ -3525,7 +3535,56 @@ registerAction("d", function()
         end
     end
     afterDelete()
-end)
+    return true
+end
+function yankTextObject(to, jumpBeg)
+    local begX, begY, edX, edY = to.initialX, to.initialY, to.x, to.y
+    if edY < begY or edY == begY and edX < begX then
+        begX, edX = edX, begX
+        begY, edY = edY, begY
+    end
+    if to.linewise then
+        copybuffer = {}
+        for i = begY, edY do
+            table.insert(copybuffer, #copybuffer + 1, filelines[i])
+        end
+        copytype = "linetable"
+    else
+        if to.exclusive then
+            edX = edX - 1
+            if begY == edY and edX < begX then
+                if jumpBeg then
+                    currCursorX = begX
+                    currCursorY = begY
+                end
+                return true
+            end
+            if edX < 1 then
+                edY = edY - 1
+                -- SAFETY: edY >= 1 because begY >= 1 and edY >= begY
+                edX = #filelines[edY]
+            end
+        end
+        if begY ~= edY then
+            err("TODO: multiline characterwise, press enter to continue...")
+            local _, k = os.pullEvent("key")
+            while k ~= keys.enter do
+                _, k = os.pullEvent("key")
+            end
+            redrawTerm()
+            return false
+        else
+            local line = filelines[begY]
+            copybuffer = string.sub(line, begX, edX)
+            copytype = "text"
+        end
+    end
+    if jumpBeg then
+        currCursorX = begX
+        currCursorY = begY
+    end
+    return true
+end
 registerAction("diw", function() resetLastSearch() local word, beg, ed
                 local word,beg,ed
                     word,beg,ed = str.wordOfPos(filelines[currCursorY + currFileOffset], currCursorX + currXOffset)
@@ -3939,16 +3998,17 @@ registerAction("ciw", function() resetLastSearch()
                     fileContents[currfile]["unsavedchanges"] = true
                     insertMode()
                 end)
-registerActionMulti({{"cw", "ce"}}, function(_)
-    return function() resetLastSearch()
-                local word, beg, ed = str.wordOfPos(filelines[currCursorY + currFileOffset], currCursorX + currXOffset)
-                filelines[currCursorY + currFileOffset] = string.sub(filelines[currCursorY + currFileOffset], 1, currCursorX + currXOffset - 1).. string.sub(filelines[currCursorY + currFileOffset], ed + 1, #filelines[currCursorY + currFileOffset])
-                recalcMLCs()
-                drawFile()
-                fileContents[currfile]["unsavedchanges"] = true
-                insertMode()
-            end
-        end)
+registerAction("c", function()
+    resetLastSearch()
+    local to = pullTextObject()
+    if to == nil then
+        sendMsg("No text object")
+        return
+    end
+    if cutTextObject(to) then
+        insertMode()
+    end
+end)
 registerAction("C", function()
             filelines[currCursorY + currFileOffset] = string.sub(filelines[currCursorY + currFileOffset], 1, currCursorX + currXOffset - 1)
             recalcMLCs()
