@@ -3477,7 +3477,7 @@ function cutTextObject(to, settings)
         fileContents[currfile]["unsavedchanges"] = true
         if currCursorY + currFileOffset > begY then
             if currCursorY + currFileOffset > edY then
-                currCursorY = currCursorY - (edY - begY)
+                currCursorY = currCursorY - (edY - begY) - 1
             else
                 currCursorY = begY - currFileOffset
             end
@@ -3511,13 +3511,29 @@ function cutTextObject(to, settings)
             end
         end
         if begY ~= edY then
-            err("TODO: multiline characterwise, press enter to continue...")
-            local _, k = os.pullEvent("key")
-            while k ~= keys.enter do
-                _, k = os.pullEvent("key")
+            local begLine = filelines[begY]
+            local edLine = filelines[edY]
+            copybuffer = {begLine:sub(begX), edLine:sub(1, edX)}
+            for i = begY + 1, edY - 1 do
+                table.insert(copybuffer, #copybuffer, filelines[i])
             end
-            redrawTerm()
-            return false
+            copytype = "texttable"
+            filelines[begY] = begLine:sub(1, begX - 1) .. edLine:sub(edX + 1)
+            for _ = begY + 1, edY do
+                table.remove(filelines, begY + 1)
+            end
+            fileContents[currfile]["unsavedchanges"] = true
+            if begY == currCursorY + currFileOffset and currCursorX + currXOffset > begX or currCursorY + currFileOffset > begY then
+                if edY == currCursorY + currFileOffset and currCursorX + currXOffset > edX  then
+                    currCursorX = currCursorX - edX + begX - 1
+                    currCursorY = begY - currFileOffset
+                elseif currCursorY + currFileOffset > edY then
+                    currCursorY = currCursorY - (edY - begY)
+                else
+                    currCursorX = begX - currXOffset
+                    currCursorY = begY - currFileOffset
+                end
+            end
         else
             local line = filelines[begY]
             copybuffer = string.sub(line, begX, edX)
@@ -3568,13 +3584,13 @@ function yankTextObject(to, jumpBeg)
             end
         end
         if begY ~= edY then
-            err("TODO: multiline characterwise, press enter to continue...")
-            local _, k = os.pullEvent("key")
-            while k ~= keys.enter do
-                _, k = os.pullEvent("key")
+            local begLine = filelines[begY]
+            local edLine = filelines[edY]
+            copybuffer = {begLine:sub(begX), edLine:sub(1, edX)}
+            for i = begY + 1, edY - 1 do
+                table.insert(copybuffer, #copybuffer, filelines[i])
             end
-            redrawTerm()
-            return false
+            copytype = "texttable"
         else
             local line = filelines[begY]
             copybuffer = string.sub(line, begX, edX)
@@ -3675,6 +3691,17 @@ registerAction("p", function()
                 for i=#copybuffer,1,-1 do
                     table.insert(filelines, currCursorY + currFileOffset + 1, copybuffer[i])
                 end
+            elseif copytype == "texttable" then
+                if #copybuffer > 0 then
+                    local line = filelines[currCursorY + currFileOffset]
+                    local prefix = line:sub(1, currCursorX + currXOffset)
+                    local suffix = line:sub(currCursorX + currXOffset + 1, #line)
+                    filelines[currCursorY + currFileOffset] = prefix .. copybuffer[1]
+                    for i = #copybuffer, 2, -1 do
+                        table.insert(filelines, currCursorY + currFileOffset + 1, copybuffer[i])
+                    end
+                    filelines[currCursorY + currFileOffset + #copybuffer - 1] = filelines[currCursorY + currFileOffset + #copybuffer - 1] .. suffix
+                end
             end
             recalcMLCs(true)
             drawFile(true)
@@ -3702,6 +3729,24 @@ registerAction("P", function()
                 while currCursorY > hig - 1 do
                     currCursorY = currCursorY - 1
                     currFileOffset = currFileOffset + 1
+                end
+            elseif copytype == "texttable" then
+                if #copybuffer > 0 then
+                    local line = filelines[currCursorY + currFileOffset]
+                    local prefix = line:sub(1, currCursorX + currXOffset - 1)
+                    local suffix = line:sub(currCursorX + currXOffset, #line)
+                    filelines[currCursorY + currFileOffset] = copybuffer[#copybuffer] .. suffix
+                    for i = #copybuffer - 1, 1, -1 do
+                        table.insert(filelines, currCursorY + currFileOffset, copybuffer[i])
+                    end
+                    filelines[currCursorY + currFileOffset] = prefix .. filelines[currCursorY + currFileOffset]
+                    currCursorY = currCursorY + #copybuffer - 1
+                    if #copybuffer > 1 then
+                        currCursorX = #copybuffer[#copybuffer] + 1 - currXOffset
+                    else
+                        currCursorX = currCursorX + #copybuffer[1]
+                    end
+                    scrollToCursor()
                 end
             end
             recalcMLCs(true)
