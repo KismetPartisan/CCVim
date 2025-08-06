@@ -90,6 +90,7 @@ local Trie = {
             local depth = self._depth + 1
             for i = 1, self._numTries do
                 local node = self._nodes[i]
+                children[i] = nil
                 if node ~= nil then
                     local child = node._next[e]
                     children[i] = child
