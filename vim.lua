@@ -4017,9 +4017,9 @@ end)
 registerMotionMulti({{"g"}, {"e", "E"}}, function(lst)
     local c = lst[2]
     return {exclusive = false}, (function(opts)
+        local begs = str.wordEnds(filelines[opts.y], not string.match(c, "%u"))
+        local begsSet = tab.itemIndices(begs)
         for i = 1, repeatCount1, 1 do
-            local begs = str.wordEnds(filelines[opts.y], not string.match(c, "%u"))
-            local begsSet = tab.itemIndices(begs)
             if begs[#begs] and opts.x > begs[1] then
                 opts.x = opts.x - 1
                 while not begsSet[opts.x] do
@@ -4077,9 +4077,9 @@ end)
 registerMotionMulti({{"w", "W"}}, function(lst)
     local var1 = lst[1]
     return {exclusive = true}, (function(opts)
+        local begs = str.wordBeginnings(filelines[opts.y], not string.match(var1, "%u"))
+        local begsSet = tab.itemIndices(begs)
         for i = 1, repeatCount1, 1 do
-            local begs = str.wordBeginnings(filelines[opts.y], not string.match(var1, "%u"))
-            local begsSet = tab.itemIndices(begs)
             if begs[#begs] and opts.x < begs[#begs] then
                 opts.x = opts.x + 1
                 while not begsSet[opts.x] do
@@ -4096,9 +4096,9 @@ end)
 registerMotionMulti({{"e", "E"}}, function(lst)
     local var1 = lst[1]
     return {exclusive = false}, (function(opts)
+        local begs = str.wordEnds(filelines[opts.y], not string.match(var1, "%u"))
+        local begsSet = tab.itemIndices(begs)
         for i = 1, repeatCount1, 1 do
-            local begs = str.wordEnds(filelines[opts.y], not string.match(var1, "%u"))
-            local begsSet = tab.itemIndices(begs)
             if begs[#begs] then
                 if opts.x < begs[#begs] then
                     opts.x = opts.x + 1
@@ -4115,9 +4115,9 @@ end)
 registerMotionMulti({{"b", "B"}}, function(lst)
     local var1 = lst[1]
     return {exclusive = true}, (function (opts)
+        local begs = str.wordBeginnings(filelines[opts.y], not string.match(var1, "%u"))
+        local begsSet = tab.itemIndices(begs)
         for i = 1, repeatCount1, 1 do
-            local begs = str.wordBeginnings(filelines[opts.y], not string.match(var1, "%u"))
-            local begsSet = tab.itemIndices(begs)
             if begs[1] then
                 if opts.x > begs[1] then
                     opts.x = opts.x - 1
