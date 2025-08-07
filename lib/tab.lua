@@ -11,14 +11,14 @@ local contains = find
 
 -- should be used instead of find when multiple queries are expected
 local function itemIndices(table)
-    local inversed = {}
+    local inverted = {}
     for i=1,#table,1 do
         local item = table[i]
-        if item ~= nil and not inversed[item] then
-            inversed[item] = i
+        if item ~= nil and not inverted[item] then
+            inverted[item] = i
         end
     end
-    return inversed
+    return inverted
 end
 
 local function getLongestItem(table)
