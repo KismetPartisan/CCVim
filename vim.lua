@@ -935,19 +935,47 @@ local function drawFileLine(i)
                     local synt = filetypearr[fileContents[currfile]["filetype"]].syntax()
                     local wordsOfLine = str.split(filelines[i], " ")
                     setpos(1 - currXOffset + lineoffset, i - currFileOffset)
+                    local wordBeg = 1
+                    local wordEd = -1
                     for j=1,#wordsOfLine,1 do
+                        wordBeg = wordEd + 2
+                        wordEd = wordBeg + #wordsOfLine[j] - 1
+                        local hlBg, hlFg = colors.black, colors.white
                         if tab.find(synt[1], wordsOfLine[j]) then
-                            setcolors(colors.yellow, colors.blue)
+                            hlBg, hlFg = colors.yellow, colors.blue
                         elseif tab.find(synt[2][1], wordsOfLine[j]) then
-                            setcolors(colors.black, colors.lightBlue)
+                            hlBg, hlFg = colors.black, colors.lightBlue
                         elseif tab.find(synt[2][2], wordsOfLine[j]) then
-                            setcolors(colors.black, colors.purple)
-                        else
-                            setcolors(colors.black, colors.white)
+                            hlBg, hlFg = colors.black, colors.purple
                         end
-                        write(wordsOfLine[j])
+                        if lineVisualEd < lineVisualBeg or wordBeg > lineVisualEd or wordEd < lineVisualBeg then
+                            setcolors(hlBg, hlFg)
+                            write(wordsOfLine[j])
+                        elseif wordBeg >= lineVisualBeg and wordEd <= lineVisualEd then
+                            setcolors(colors.gray, hlFg)
+                            write(wordsOfLine[j])
+                        else
+                            local wordVisualBeg = lineVisualBeg - wordBeg + 1
+                            local wordVisualEd = lineVisualEd - wordBeg + 1
+                            if wordVisualBeg < 1 then
+                                wordVisualBeg = 1
+                            end
+                            if wordVisualEd < 1 then
+                                wordVisualEd = 0
+                            end
+                            setcolors(hlBg, hlFg)
+                            write(string.sub(wordsOfLine[j], 1, wordVisualBeg - 1))
+                            setcolors(colors.gray, hlFg)
+                            write(string.sub(wordsOfLine[j], wordVisualBeg, wordVisualEd))
+                            setcolors(hlBg, hlFg)
+                            write(string.sub(wordsOfLine[j], wordVisualEd + 1, #wordsOfLine[j]))
+                        end
                         if j ~= #wordsOfLine then
-                            setcolors(colors.black, colors.white)
+                            if wordEd + 1 > lineVisualEd or wordEd + 1 < lineVisualBeg then
+                                setcolors(colors.black, colors.white)
+                            else
+                                setcolors(colors.gray, colors.white)
+                            end
                             write(" ")
                         end
                     end
@@ -957,8 +985,15 @@ local function drawFileLine(i)
                     local inquotes = false
                     local justset = false
                     local quotepoints = {}
-                    setcolors(colors.black, colors.red)
+                    local hlBg, hlFg = colors.black, colors.red
+                    setcolors(hlBg, hlFg)
                     for j=1,#filelines[i],1 do
+                        if j == lineVisualBeg then
+                            setcolors(colors.gray, hlFg)
+                        end
+                        if j == lineVisualEd + 1 then
+                            setcolors(hlBg, hlFg)
+                        end
                         local writechar = not ((1 - currXOffset - lineoffset + j - 1 < 1) or (1 - currXOffset + lineoffset + j - 1 > wid))
                         if writechar then
                             setpos(1 - currXOffset + lineoffset + j - 1, i - currFileOffset)
@@ -988,8 +1023,26 @@ local function drawFileLine(i)
                     commentstart = str.find(filelines[i], synt[4], quotepoints)
                     if commentstart and commentstart ~= false then
                         setpos(1 - currXOffset + lineoffset + commentstart - 1, i - currFileOffset)
+                        local commentText = string.sub(filelines[i], commentstart, #filelines[i])
                         setcolors(colors.black, colors.green)
-                        write(string.sub(filelines[i], commentstart, #filelines[i]))
+                        if lineVisualBeg > 0 and lineVisualEd > 0 and lineVisualBeg <= lineVisualEd then
+                            local commentVisualBeg = lineVisualBeg - commentstart + 1
+                            local commentVisualEd = lineVisualEd - commentstart + 1
+                            if commentVisualBeg < 1 then
+                                commentVisualBeg = 1
+                            end
+                            if commentVisualEd < 1 then
+                                commentVisualEd = 0
+                            end
+                            setcolors(colors.black, colors.green)
+                            write(string.sub(commentText, 1, commentVisualBeg - 1))
+                            setcolors(colors.gray, colors.green)
+                            write(string.sub(commentText, commentVisualBeg, commentVisualEd))
+                            setcolors(colors.black, colors.green)
+                            write(string.sub(commentText, commentVisualEd + 1, #commentText))
+                        else
+                            write(commentText)
+                        end
                     end
                     commentstart = str.find(filelines[i], synt[7][2])
                     if not commentstart then
@@ -999,11 +1052,28 @@ local function drawFileLine(i)
                         if tab.find(fileContents[currfile]["Multi-line comments"][2], i) then
                             setpos(1 - currXOffset + lineoffset, i - currFileOffset)
                             setcolors(colors.black, colors.green)
-                            write(filelines[i])
+                            if lineVisualBeg > 0 and lineVisualEd > 0 and lineVisualBeg <= lineVisualEd then
+                                write(string.sub(filelines[i], 1, lineVisualBeg - 1))
+                                setcolors(colors.gray, colors.green)
+                                write(string.sub(filelines[i], lineVisualBeg, lineVisualEd))
+                                setcolors(colors.black, colors.green)
+                                write(string.sub(filelines[i], lineVisualEd + 1, #filelines[i]))
+                            else
+                                write(string.sub(filelines[i], 1, #filelines[i]))
+                            end
                         elseif tab.find(fileContents[currfile]["Multi-line comments"][3], i) then
                             setpos(1 - currXOffset + lineoffset, i - currFileOffset)
+                            local commentText = string.sub(filelines[i], 1, commentstart + 1)
                             setcolors(colors.black, colors.green)
-                            write(string.sub(filelines[i], 1, commentstart + 1))
+                            if lineVisualBeg > 0 and lineVisualEd > 0 and lineVisualBeg <= lineVisualEd then
+                                write(string.sub(commentText, 1, lineVisualBeg - 1))
+                                setcolors(colors.gray, colors.green)
+                                write(string.sub(commentText, lineVisualBeg, lineVisualEd))
+                                setcolors(colors.black, colors.green)
+                                write(string.sub(commentText, lineVisualEd + 1, #commentText))
+                            else
+                                write(string.sub(commentText, 1, #commentText))
+                            end
                         end
                     end
                 else
