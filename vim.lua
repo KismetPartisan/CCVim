@@ -104,6 +104,8 @@ local modeMappings = {
     n = Trie.new(),
     i = Trie.new(),
     c = Trie.new(),
+    o = Trie.new(),
+    x = Trie.new(),
 }
 local mappingCommands = {
     map = {mode = "", remap = true},
@@ -111,11 +113,17 @@ local mappingCommands = {
     nmap = {mode = "n", remap = true},
     imap = {mode = "i", remap = true},
     cmap = {mode = "c", remap = true},
+    omap = {mode = "o", remap = true},
+    xmap = {mode = "x", remap = true},
+    vmap = {mode = "x", remap = true},
     noremap = {mode = "", remap = false},
     ["noremap!"] = {mode = "!", remap = false},
     nnoremap = {mode = "n", remap = false},
     inoremap = {mode = "i", remap = false},
     cnoremap = {mode = "c", remap = false},
+    onoremap = {mode = "o", remap = false},
+    xnoremap = {mode = "x", remap = false},
+    vnoremap = {mode = "x", remap = false},
 }
 local currentMode = "n"
 local noremapFor = 0
@@ -137,6 +145,8 @@ local repeatCount1 = 1
 local scrollOption = 10
 local shiftWidth = 4
 local modeMsg
+local visualSelectionRendered
+local visualModeState = {}  -- Stored as a text object
 local typeahead = {}  -- String keys and pseudokeys
 local typeaheadUpdates = {}  -- Mouse position updates
 local inputProperties = {mouseX = 1, mouseY = 1, pasteData = ""}
@@ -144,7 +154,10 @@ local activeModifiers = {}
 local prefixedModifiers = {}
 local keyboards = {}
 local useTmKeyboards = false
-local actionsTrie = Trie.new()
+local actionsTrie = Trie.new()  -- Generic Normal-mode handlers
+local motionsTrie = Trie.new()  -- Normal & operator-pending -mode 
+local textObjectsTrie = Trie.new()  -- Only operator-pending-mode 
+local visualActionsTrie = Trie.new()  -- Generic Visual-mode handlers 
 local keyNamesTranslation = {
     backspace = "bs",
     enter = "cr",
@@ -300,13 +313,58 @@ local function registerActionMulti(components, getCb)
     end
 end
 
+local function registerMotion(seq, opts, cb)
+    local key = keyseq.parseKeySequence(seq, keyNormalisation, modifierOrder)
+    motionsTrie:put(key, {cb, opts or {}})
+end
+
+local function registerMotionMulti(components, getOptsCb)
+    for _, lst in itertools.product(components) do
+        registerMotion(table.concat(lst), getOptsCb(lst))
+    end
+end
+
+local function registerTextObject(seq, opts, cb)
+    local key = keyseq.parseKeySequence(seq, keyNormalisation, modifierOrder)
+    textObjectsTrie:put(key, {cb, opts or {}})
+end
+
+local function registerTextObjectMulti(components, getOptsCb)
+    for _, lst in itertools.product(components) do
+        registerTextObject(table.concat(lst), getOptsCb(lst))
+    end
+end
+
+local function registerVisualAction(seq, cb)
+    local key = keyseq.parseKeySequence(seq, keyNormalisation, modifierOrder)
+    visualActionsTrie:put(key, cb)
+end
+
+local function registerVisualActionMulti(components, getCb)
+    for _, lst in itertools.product(components) do
+        registerVisualAction(table.concat(lst), getCb(lst))
+    end
+end
+
+local function registerNormalVisualAction(seq, cb)
+    registerAction(seq, cb)
+    registerVisualAction(seq, function()
+        currCursorX = visualModeState.x - currXOffset
+        currCursorY = visualModeState.y - currFileOffset
+        local result = cb() or false
+        visualModeState.x = currCursorX + currXOffset
+        visualModeState.y = currCursorY + currFileOffset
+        return result
+    end)
+end
+
 local function registerMapping(src, dst, opts)
     opts = opts or {}
     local srcArr = keyseq.parseKeySequence(src, keyNormalisation, modifierOrder)
     local dstArr = keyseq.parseKeySequence(dst, keyNormalisation, modifierOrder)
     local mode = opts.mode or ""
     if mode == "" then
-        mode = "n"
+        mode = "nox"
     elseif mode == "!" then
         mode = "ic"
     end
@@ -718,6 +776,106 @@ local function pullCommand(input, numeric, len)
     return input
 end
 
+local function pullTextObject(opts)
+    local prevMode = currentMode
+    currentMode = "o"
+    opts = opts and itertools.collect(pairs(opts)) or {wantX = oldx}
+    opts.x = opts.x or currCursorX + currXOffset
+    opts.y = opts.y or currCursorY + currFileOffset
+    opts.initialX = opts.initialX or opts.x
+    opts.initialY = opts.initialY or opts.y
+    local prio = {textObject = 2, motion = 1, max = 2}
+    local cons = Trie.Consumer.new{
+        n = prio.max,
+        [prio.textObject] = textObjectsTrie,
+        [prio.motion] = motionsTrie,
+    }
+    local countMultiplier = repeatCount1
+    local countStr = pullCount()
+    if #countStr > 0 then
+        repeatCount0 = tonumber(countStr) * countMultiplier
+        repeatCount1 = repeatCount0
+    end
+    local i = 0
+    while true do
+        i = i + 1
+        local key
+        if i == 1 then
+            key = peekTypeaheadWRMP(i)
+        else
+            key = peekTypeahead(i)
+        end
+        if key == "C-c" then
+            -- Clear typeahead
+            for _ = 1, i do
+                pullTypeahead()
+            end
+            cons = nil
+            break
+        end
+        if not cons:next(key) then
+            break
+        end
+        if not cons:hasNext() then
+            break
+        end
+    end
+    if cons ~= nil then
+        local len, entry, kind = cons:getDeepest()
+        if len > 0 then
+            for _ = 1, len do
+                pullTypeahead()
+            end
+            if kind == prio.textObject or kind == prio.motion then
+                if entry[2] then
+                    itertools.update(opts, entry[2])
+                end
+                opts = entry[1](opts) or opts
+            end
+        else
+            -- Drop one key
+            pullTypeahead()
+            opts = nil
+        end
+    else
+        opts = nil  -- no text object returned => operator should terminate
+    end
+    currentMode = prevMode
+    return opts
+end
+
+-- Helper text objects
+local function textObjectLine(opts)
+    opts = opts and itertools.collect(pairs(opts)) or {wantX = oldx}
+    opts.x = opts.x or currCursorX + currXOffset
+    opts.y = opts.y or currCursorY + currFileOffset
+    opts.initialX = opts.initialX or opts.x
+    opts.initialY = opts.initialY or opts.y
+
+    opts.linewise = true
+    opts.y = opts.y + repeatCount1 - 1
+    if opts.y > #filelines then
+        opts.y = #filelines
+    end
+    return opts
+end
+
+local function textObjectEOL(opts)
+    opts = opts and itertools.collect(pairs(opts)) or {wantX = oldx}
+    opts.x = opts.x or currCursorX + currXOffset
+    opts.y = opts.y or currCursorY + currFileOffset
+    opts.initialX = opts.initialX or opts.x
+    opts.initialY = opts.initialY or opts.y
+
+    opts.y = opts.y + repeatCount1 - 1
+    if opts.y > #filelines then
+        opts.y = #filelines
+    end
+    opts.wantX = 999999999
+    opts.x = #filelines[opts.y]
+    return opts
+end
+
 local function clearScreenLine(line)
     setcolors(colors.black, colors.white)
     setpos(1, line)
@@ -750,6 +908,207 @@ local function setModeMsg(msg)
     end
 end
 
+local function drawFileLine(i)
+    setpos(1, i - currFileOffset)
+    if filelines then
+        local lineVisualBeg = 0
+        local lineVisualEd = 0
+        if filelines[i] ~= nil then
+            if visualSelectionRendered and visualModeState then
+                local begX, begY, edX, edY = visualModeState.initialX, visualModeState.initialY, visualModeState.x, visualModeState.y
+                if begX and begY and edX and edY then
+                    if edY < begY or edY == begY and edX < begX then
+                        begX, edX = edX, begX
+                        begY, edY = edY, begY
+                    end
+                end
+                if visualModeState.linewise then
+                    if i >= begY and i <= edY then
+                        lineVisualBeg = 1
+                        lineVisualEd = #filelines[i]
+                    end
+                else
+                    if i >= begY and i <= edY then
+                        lineVisualBeg = 1
+                        lineVisualEd = #filelines[i]
+                    end
+                    if i == begY then
+                        lineVisualBeg = begX
+                    end
+                    if i == edY then
+                        lineVisualEd = edX
+                    end
+                end
+            end
+            setcolors(colors.black, colors.white)
+            if fileContents[currfile] then
+                if fileContents[currfile]["filetype"] and syntaxhighlighting and filetypearr[fileContents[currfile]["filetype"]] then
+                    -- TODO visual selection
+                    local synt = filetypearr[fileContents[currfile]["filetype"]].syntax()
+                    local wordsOfLine = str.split(filelines[i], " ")
+                    setpos(1 - currXOffset + lineoffset, i - currFileOffset)
+                    local wordBeg = 1
+                    local wordEd = -1
+                    for j=1,#wordsOfLine,1 do
+                        wordBeg = wordEd + 2
+                        wordEd = wordBeg + #wordsOfLine[j] - 1
+                        local hlBg, hlFg = colors.black, colors.white
+                        if tab.find(synt[1], wordsOfLine[j]) then
+                            hlBg, hlFg = colors.yellow, colors.blue
+                        elseif tab.find(synt[2][1], wordsOfLine[j]) then
+                            hlBg, hlFg = colors.black, colors.lightBlue
+                        elseif tab.find(synt[2][2], wordsOfLine[j]) then
+                            hlBg, hlFg = colors.black, colors.purple
+                        end
+                        if lineVisualEd < lineVisualBeg or wordBeg > lineVisualEd or wordEd < lineVisualBeg then
+                            setcolors(hlBg, hlFg)
+                            write(wordsOfLine[j])
+                        elseif wordBeg >= lineVisualBeg and wordEd <= lineVisualEd then
+                            setcolors(colors.gray, hlFg)
+                            write(wordsOfLine[j])
+                        else
+                            local wordVisualBeg = lineVisualBeg - wordBeg + 1
+                            local wordVisualEd = lineVisualEd - wordBeg + 1
+                            if wordVisualBeg < 1 then
+                                wordVisualBeg = 1
+                            end
+                            if wordVisualEd < 1 then
+                                wordVisualEd = 0
+                            end
+                            setcolors(hlBg, hlFg)
+                            write(string.sub(wordsOfLine[j], 1, wordVisualBeg - 1))
+                            setcolors(colors.gray, hlFg)
+                            write(string.sub(wordsOfLine[j], wordVisualBeg, wordVisualEd))
+                            setcolors(hlBg, hlFg)
+                            write(string.sub(wordsOfLine[j], wordVisualEd + 1, #wordsOfLine[j]))
+                        end
+                        if j ~= #wordsOfLine then
+                            if wordEd + 1 > lineVisualEd or wordEd + 1 < lineVisualBeg then
+                                setcolors(colors.black, colors.white)
+                            else
+                                setcolors(colors.gray, colors.white)
+                            end
+                            write(" ")
+                        end
+                    end
+                    --another loop for drawing strings
+                    setpos(1 - currXOffset + lineoffset, i - currFileOffset)
+                    local quotationmarks = str.indicesOfLetter(filelines[i], synt[3])
+                    local inquotes = false
+                    local justset = false
+                    local quotepoints = {}
+                    local hlBg, hlFg = colors.black, colors.red
+                    setcolors(hlBg, hlFg)
+                    for j=1,#filelines[i],1 do
+                        if j == lineVisualBeg then
+                            setcolors(colors.gray, hlFg)
+                        end
+                        if j == lineVisualEd + 1 then
+                            setcolors(hlBg, hlFg)
+                        end
+                        local writechar = not ((1 - currXOffset - lineoffset + j - 1 < 1) or (1 - currXOffset + lineoffset + j - 1 > wid))
+                        if writechar then
+                            setpos(1 - currXOffset + lineoffset + j - 1, i - currFileOffset)
+                        end
+                        if tab.find(quotationmarks, j) then
+                            if not inquotes then
+                                if j < quotationmarks[#quotationmarks] then
+                                    inquotes = true
+                                    justset = true
+                                end
+                            end
+                        end
+                        if inquotes then
+                            if writechar then
+                                write(string.sub(filelines[i], j, j))
+                            end
+                            table.insert(quotepoints, #quotepoints, j - 2) --Don't know why I need to subtract 2 but heck it works
+                        end
+                        if tab.find(quotationmarks, j) and not justset then
+                            if inquotes then
+                                inquotes = false
+                            end
+                        end
+                        justset = false
+                    end
+                    local commentstart = 0
+                    commentstart = str.find(filelines[i], synt[4], quotepoints)
+                    if commentstart and commentstart ~= false then
+                        setpos(1 - currXOffset + lineoffset + commentstart - 1, i - currFileOffset)
+                        local commentText = string.sub(filelines[i], commentstart, #filelines[i])
+                        setcolors(colors.black, colors.green)
+                        if lineVisualBeg > 0 and lineVisualEd > 0 and lineVisualBeg <= lineVisualEd then
+                            local commentVisualBeg = lineVisualBeg - commentstart + 1
+                            local commentVisualEd = lineVisualEd - commentstart + 1
+                            if commentVisualBeg < 1 then
+                                commentVisualBeg = 1
+                            end
+                            if commentVisualEd < 1 then
+                                commentVisualEd = 0
+                            end
+                            setcolors(colors.black, colors.green)
+                            write(string.sub(commentText, 1, commentVisualBeg - 1))
+                            setcolors(colors.gray, colors.green)
+                            write(string.sub(commentText, commentVisualBeg, commentVisualEd))
+                            setcolors(colors.black, colors.green)
+                            write(string.sub(commentText, commentVisualEd + 1, #commentText))
+                        else
+                            write(commentText)
+                        end
+                    end
+                    commentstart = str.find(filelines[i], synt[7][2])
+                    if not commentstart then
+                        commentstart = 0
+                    end
+                    if not lowspec then
+                        if tab.find(fileContents[currfile]["Multi-line comments"][2], i) then
+                            setpos(1 - currXOffset + lineoffset, i - currFileOffset)
+                            setcolors(colors.black, colors.green)
+                            if lineVisualBeg > 0 and lineVisualEd > 0 and lineVisualBeg <= lineVisualEd then
+                                write(string.sub(filelines[i], 1, lineVisualBeg - 1))
+                                setcolors(colors.gray, colors.green)
+                                write(string.sub(filelines[i], lineVisualBeg, lineVisualEd))
+                                setcolors(colors.black, colors.green)
+                                write(string.sub(filelines[i], lineVisualEd + 1, #filelines[i]))
+                            else
+                                write(string.sub(filelines[i], 1, #filelines[i]))
+                            end
+                        elseif tab.find(fileContents[currfile]["Multi-line comments"][3], i) then
+                            setpos(1 - currXOffset + lineoffset, i - currFileOffset)
+                            local commentText = string.sub(filelines[i], 1, commentstart + 1)
+                            setcolors(colors.black, colors.green)
+                            if lineVisualBeg > 0 and lineVisualEd > 0 and lineVisualBeg <= lineVisualEd then
+                                write(string.sub(commentText, 1, lineVisualBeg - 1))
+                                setcolors(colors.gray, colors.green)
+                                write(string.sub(commentText, lineVisualBeg, lineVisualEd))
+                                setcolors(colors.black, colors.green)
+                                write(string.sub(commentText, lineVisualEd + 1, #commentText))
+                            else
+                                write(string.sub(commentText, 1, #commentText))
+                            end
+                        end
+                    end
+                else
+                    setpos(1 - currXOffset + lineoffset, i - currFileOffset)
+                    if lineVisualBeg > 0 and lineVisualEd > 0 and lineVisualBeg <= lineVisualEd then
+                        setcolors(colors.black, colors.white)
+                        write(string.sub(filelines[i], 1, lineVisualBeg - 1))
+                        setcolors(colors.gray, colors.white)
+                        write(string.sub(filelines[i], lineVisualBeg, lineVisualEd))
+                        setcolors(colors.black, colors.white)
+                        write(string.sub(filelines[i], lineVisualEd + 1, #filelines[i]))
+                    else
+                        write(string.sub(filelines[i], 1, #filelines[i]))
+                    end
+                end
+            end
+        else
+            setcolors(colors.black, colors.purple)
+            write("~")
+        end
+    end
+end
+
 local function drawFile(forcedredraw)
     motd = false
     if currXOffset ~= oldXOffset or currFileOffset ~= oldFileOffset or forcedredraw then
@@ -759,96 +1118,7 @@ local function drawFile(forcedredraw)
         oldXOffset = currXOffset
         oldFileOffset = currFileOffset
         for i=currFileOffset,(hig - 1) + currFileOffset,1 do
-            setpos(1, i - currFileOffset)
-            if filelines then
-                if filelines[i] ~= nil then
-                    setcolors(colors.black, colors.white)
-                    if fileContents[currfile] then
-                        if fileContents[currfile]["filetype"] and syntaxhighlighting and filetypearr[fileContents[currfile]["filetype"]] then
-                            local synt = filetypearr[fileContents[currfile]["filetype"]].syntax()
-                            local wordsOfLine = str.split(filelines[i], " ")
-                            setpos(1 - currXOffset + lineoffset, i - currFileOffset)
-                            for j=1,#wordsOfLine,1 do
-                                if tab.find(synt[1], wordsOfLine[j]) then
-                                    setcolors(colors.yellow, colors.blue)
-                                elseif tab.find(synt[2][1], wordsOfLine[j]) then
-                                    setcolors(colors.black, colors.lightBlue)
-                                elseif tab.find(synt[2][2], wordsOfLine[j]) then
-                                    setcolors(colors.black, colors.purple)
-                                else
-                                    setcolors(colors.black, colors.white)
-                                end
-                                write(wordsOfLine[j])
-                                if j ~= #wordsOfLine then
-                                    setcolors(colors.black, colors.white)
-                                    write(" ")
-                                end
-                            end
-                            --another loop for drawing strings
-                            setpos(1 - currXOffset + lineoffset, i - currFileOffset)
-                            local quotationmarks = str.indicesOfLetter(filelines[i], synt[3])
-                            local inquotes = false
-                            local justset = false
-                            local quotepoints = {}
-                            setcolors(colors.black, colors.red)
-                            for j=1,#filelines[i],1 do
-                                local writechar = not ((1 - currXOffset - lineoffset + j - 1 < 1) or (1 - currXOffset + lineoffset + j - 1 > wid))
-                                if writechar then
-                                    setpos(1 - currXOffset + lineoffset + j - 1, i - currFileOffset)
-                                end
-                                if tab.find(quotationmarks, j) then
-                                    if not inquotes then
-                                        if j < quotationmarks[#quotationmarks] then
-                                            inquotes = true
-                                            justset = true
-                                        end
-                                    end
-                                end
-                                if inquotes then
-                                    if writechar then
-                                        write(string.sub(filelines[i], j, j))
-                                    end
-                                    table.insert(quotepoints, #quotepoints, j - 2) --Don't know why I need to subtract 2 but heck it works
-                                end
-                                if tab.find(quotationmarks, j) and not justset then
-                                    if inquotes then
-                                        inquotes = false
-                                    end
-                                end
-                                justset = false
-                            end
-                            local commentstart = 0
-                            commentstart = str.find(filelines[i], synt[4], quotepoints)
-                            if commentstart and commentstart ~= false then
-                                setpos(1 - currXOffset + lineoffset + commentstart - 1, i - currFileOffset)
-                                setcolors(colors.black, colors.green)
-                                write(string.sub(filelines[i], commentstart, #filelines[i]))
-                            end
-                            commentstart = str.find(filelines[i], synt[7][2])
-                            if not commentstart then
-                                commentstart = 0
-                            end
-                            if not lowspec then
-                                if tab.find(fileContents[currfile]["Multi-line comments"][2], i) then
-                                    setpos(1 - currXOffset + lineoffset, i - currFileOffset)
-                                    setcolors(colors.black, colors.green)
-                                    write(filelines[i])
-                                elseif tab.find(fileContents[currfile]["Multi-line comments"][3], i) then
-                                    setpos(1 - currXOffset + lineoffset, i - currFileOffset)
-                                    setcolors(colors.black, colors.green)
-                                    write(string.sub(filelines[i], 1, commentstart + 1))
-                                end
-                            end
-                        else
-                            setpos(1 - currXOffset + lineoffset, i - currFileOffset)
-                            write(string.sub(filelines[i], 1, #filelines[i]))
-                        end
-                    end
-                else
-                    setcolors(colors.black, colors.purple)
-                    write("~")
-                end
-            end
+            drawFileLine(i)
         end
     else
         --only draw 3 lines
@@ -856,95 +1126,7 @@ local function drawFile(forcedredraw)
             if i - currFileOffset < hig then
                 clearScreenLine(i - currFileOffset)
                 setpos(1, i - currFileOffset)
-                if filelines then
-                    if filelines[i] ~= nil then
-                        setcolors(colors.black, colors.white)
-                        if fileContents[currfile] then
-                            if fileContents[currfile]["filetype"] and syntaxhighlighting and filetypearr[fileContents[currfile]["filetype"]] then
-                                local synt = filetypearr[fileContents[currfile]["filetype"]].syntax()
-                                local wordsOfLine = str.split(filelines[i], " ")
-                                setpos(1 - currXOffset + lineoffset, i - currFileOffset)
-                                for j=1,#wordsOfLine,1 do
-                                    if tab.find(synt[1], wordsOfLine[j]) then
-                                        setcolors(colors.yellow, colors.blue)
-                                    elseif tab.find(synt[2][1], wordsOfLine[j]) then
-                                        setcolors(colors.black, colors.lightBlue)
-                                    elseif tab.find(synt[2][2], wordsOfLine[j]) then
-                                        setcolors(colors.black, colors.purple)
-                                    else
-                                        setcolors(colors.black, colors.white)
-                                    end
-                                    write(wordsOfLine[j])
-                                    if j ~= #wordsOfLine then
-                                        setcolors(colors.black, colors.white)
-                                        write(" ")
-                                    end
-                                end
-                                --another loop for drawing strings
-                                setpos(1 - currXOffset + lineoffset, i - currFileOffset)
-                                local quotationmarks = str.indicesOfLetter(filelines[i], synt[3])
-                                local inquotes = false
-                                local justset = false
-                                local quotepoints = {}
-                                setcolors(colors.black, colors.red)
-                                for j=1,#filelines[i],1 do
-                                    local writechar = not ((1 - currXOffset - lineoffset + j - 1 < 1) or (1 - currXOffset + lineoffset + j - 1 > wid))
-                                    if writechar then
-                                        setpos(1 - currXOffset + lineoffset + j - 1, i - currFileOffset)
-                                    end
-                                    if tab.find(quotationmarks, j) then
-                                        if not inquotes then
-                                            if j < quotationmarks[#quotationmarks] then
-                                                inquotes = true
-                                                justset = true
-                                            end
-                                        end
-                                    end
-                                    if inquotes then
-                                        if writechar then
-                                            write(string.sub(filelines[i], j, j))
-                                        end
-                                        table.insert(quotepoints, #quotepoints, j - 2)
-                                    end
-                                    if tab.find(quotationmarks, j) and not justset then
-                                        if inquotes then
-                                            inquotes = false
-                                        end
-                                    end
-                                    justset = false
-                                end
-                                local commentstart = 0
-                                commentstart = str.find(filelines[i], synt[4], quotepoints)
-                                if commentstart and commentstart ~= false then
-                                    setpos(1 - currXOffset + lineoffset + commentstart - 1, i - currFileOffset)
-                                    setcolors(colors.black, colors.green)
-                                    write(string.sub(filelines[i], commentstart, #filelines[i]))
-                                end
-                                commentstart = str.find(filelines[i], synt[7][2])
-                                if not commentstart then
-                                    commentstart = 0
-                                end
-                                if not lowspec then
-                                    if tab.find(fileContents[currfile]["Multi-line comments"][2], i) then
-                                        setpos(1 - currXOffset + lineoffset, i - currFileOffset)
-                                        setcolors(colors.black, colors.green)
-                                        write(filelines[i])
-                                    elseif tab.find(fileContents[currfile]["Multi-line comments"][3], i) then
-                                        setpos(1 - currXOffset + lineoffset, i - currFileOffset)
-                                        setcolors(colors.black, colors.green)
-                                        write(string.sub(filelines[i], 1, commentstart + 1))
-                                    end
-                                end
-                            else
-                                setpos(1 - currXOffset + lineoffset, i - currFileOffset)
-                                write(string.sub(filelines[i], 1, #filelines[i]))
-                            end
-                        end
-                    else
-                        setcolors(colors.black, colors.purple)
-                        write("~")
-                    end
-                end
+                drawFileLine(i)
             end
         end
     end
@@ -984,6 +1166,47 @@ local function drawFile(forcedredraw)
             end
         end
     end
+end
+
+local function cursorIntoFile()
+    if currCursorY + currFileOffset > #filelines then
+        currCursorY = #filelines - currFileOffset
+    end
+    if currCursorY + currFileOffset < 1 then
+        currCursorY = 1 - currFileOffset
+    end
+    local line = filelines[currCursorY + currFileOffset]
+    if line and #line < currCursorX + currXOffset then
+        currCursorX = #line - currXOffset
+    end
+    if currCursorX + currXOffset < 1 then
+        currCursorX = 1 - currXOffset
+    end
+end
+
+local function scrollToCursor()
+    local forcedredraw = false
+    if currCursorY > hig - 1 then
+        local delta = hig - 1 - currCursorY
+        currCursorY = currCursorY + delta
+        currFileOffset = currFileOffset - delta
+    end
+    if currCursorY < 1 then
+        currFileOffset = currFileOffset + currCursorY - 1
+        currCursorY = 1
+    end
+    if currCursorX + lineoffset > wid then
+        local delta = wid - currCursorX - lineoffset
+        currCursorX = currCursorX + delta
+        currXOffset = currXOffset - delta
+        forcedredraw = true
+    end
+    if currCursorX < 1 then
+        currXOffset = currXOffset + currCursorX - 1
+        currCursorX = 1
+        forcedredraw = true
+    end
+    return forcedredraw
 end
 
 local function moveCursorLeft()
@@ -1133,11 +1356,22 @@ local function scrollWindowY(amount, currSOL)
             end
         end
     end
+    local line = filelines[currCursorY + currFileOffset]
     if currSOL then
-        currCursorX = 1
         currXOffset = 0
+        currCursorX = 1
+        if line then
+            currCursorX = line:find("[^ \x09]") or #line
+        end
+        if currCursorX < 1 then
+            currCursorX = 1
+        end
+        if currCursorX + lineoffset > wid then
+            local delta = wid - currCursorX - lineoffset
+            currCursorX = currCursorX + delta
+            currXOffset = currXOffset - delta
+        end
     else
-        local line = filelines[currCursorY + currFileOffset]
         if line and #line < currCursorX + currXOffset then
             currCursorX = #line - currXOffset
             if currCursorX < 1 then
@@ -1150,6 +1384,21 @@ local function scrollWindowY(amount, currSOL)
         end
     end
     drawFile(true)
+end
+
+local function performMotion(opts, cb)
+    resetLastSearch()
+    opts = opts and itertools.collect(pairs(opts)) or {}
+    opts.wantX = oldx
+    opts.x = currCursorX + currXOffset
+    opts.y = currCursorY + currFileOffset
+    opts = cb(opts) or opts
+    local dy = opts.y - currFileOffset - currCursorY
+    oldx = opts.wantX or nil
+    currCursorX = opts.x - currXOffset
+    currCursorY = opts.y - currFileOffset
+    cursorIntoFile()
+    drawFile(scrollToCursor() or dy > 1 or dy < -1)
 end
 
 --Recalculate where multi-line comments are, based on position in file
@@ -1491,6 +1740,133 @@ local function insertMode()
         -- mouse_click was already translated to tab by the pullTypeahead
         end
     end
+    setModeMsg(nil)
+    currentMode = prevMode
+end
+
+registerVisualAction("<tab>", function()
+    return true
+end)
+
+local function visualMode()
+    drawFile(true)
+    local prevMode = currentMode
+    currentMode = "x"
+    local visualModeRunning = true
+    local prio = {visualAction = 3, textObject = 2, motion = 1, max = 3}
+    local forcedredraw = true
+    while visualModeRunning do
+        visualModeState = visualModeState or {}
+        visualModeState.x = visualModeState.x or currCursorX + currXOffset
+        visualModeState.y = visualModeState.y or currCursorY + currFileOffset
+        visualModeState.initialX = visualModeState.initialX or visualModeState.x
+        visualModeState.initialY = visualModeState.initialY or visualModeState.y
+        visualModeState.exclusive = false
+        visualSelectionRendered = true
+        currCursorX = visualModeState.x - currXOffset
+        currCursorY = visualModeState.y - currFileOffset
+        oldx = visualModeState.wantX
+        scrollToCursor()
+        drawFile(forcedredraw)
+        if visualModeState.linewise then
+            setModeMsg("-- VISUAL LINE --")
+        else
+            setModeMsg("-- VISUAL --")
+        end
+        local cons = Trie.Consumer.new{
+            n = prio.max,
+            [prio.visualAction] = visualActionsTrie,
+            [prio.textObject] = textObjectsTrie,
+            [prio.motion] = motionsTrie,
+        }
+        local countStr = pullCount()
+        if #countStr > 0 then
+            repeatCount0 = tonumber(countStr)
+            repeatCount1 = repeatCount0
+        else
+            repeatCount0 = 0
+            repeatCount1 = 1
+        end
+        local i = 0
+        while true do
+            i = i + 1
+            local key
+            if i == 1 then
+                key = peekTypeaheadWRMP(i)
+            else
+                key = peekTypeahead(i)
+            end
+            if key == "C-c" then
+                -- Clear typeahead
+                for _ = 1, i do
+                    pullTypeahead()
+                end
+                cons = nil
+                visualModeRunning = false
+                break
+            end
+            if not cons:next(key) then
+                break
+            end
+            if not cons:hasNext() then
+                break
+            end
+        end
+        if cons ~= nil then
+            local len, entry, kind = cons:getDeepest()
+            if len > 0 then
+                for _ = 1, len do
+                    pullTypeahead()
+                end
+                local oldLinewise = visualModeState.linewise
+                local oldInitialX = visualModeState.initialX
+                local oldInitialY = visualModeState.initialY
+                local oldY = visualModeState.y
+                if kind == prio.visualAction then
+                    if entry() then
+                        visualModeRunning = false
+                    end
+                elseif kind == prio.textObject or kind == prio.motion then
+                    if entry[2] then
+                        itertools.update(visualModeState, entry[2])
+                    end
+                    visualModeState = entry[1](visualModeState) or visualModeState
+                end
+                visualModeState.exclusive = false
+                currCursorX = visualModeState.initialX or visualModeState.x
+                currCursorX = currCursorX - currXOffset
+                currCursorY = visualModeState.initialY or visualModeState.y
+                currCursorY = currCursorY - currFileOffset
+                cursorIntoFile()
+                visualModeState.initialX = currCursorX + currXOffset
+                visualModeState.initialY = currCursorY + currFileOffset
+                currCursorX = visualModeState.x
+                currCursorX = currCursorX - currXOffset
+                currCursorY = visualModeState.y
+                currCursorY = currCursorY - currFileOffset
+                cursorIntoFile()
+                visualModeState.x = currCursorX + currXOffset
+                visualModeState.y = currCursorY + currFileOffset
+                forcedredraw = false
+                if oldLinewise ~= visualModeState.linewise or oldInitialY ~= visualModeState.initialY then
+                    forcedredraw = true
+                elseif visualModeState.y - oldY > 1 or visualModeState.y - oldY < -1 then
+                    forcedredraw = true
+                elseif oldInitialX ~= visualModeState.initialX then
+                    forcedredraw = true
+                end
+            else
+                -- Drop one key
+                pullTypeahead()
+                opts = nil
+            end
+        else
+            visualModeRunning = false
+            break
+        end
+    end
+    visualSelectionRendered = false
+    drawFile(true)
     setModeMsg(nil)
     currentMode = prevMode
 end
@@ -2969,133 +3345,123 @@ registerAction("I", function()
             drawFile(true)
             insertMode()
         end)
-registerAction("h", function()
-    resetLastSearch()
-    if repeatCount0 > 0 then
-        -- TODO figure out why does the original repetition code contain this
-        currCursorX = currCursorX - repeatCount0 + 1
-    else
-        currCursorX = currCursorX - 1
-    end
-    if currCursorX + currXOffset < 1 then
-        currCursorX = 1
-        currXOffset = 0
-    else
-        while currCursorX < 1 do
-            currCursorX = currCursorX + 1
-            currXOffset = currXOffset - 1
+registerMotionMulti({{"h", "<left>"}}, function()
+    return {exclusive = true}, (function(opts)
+        opts.x = opts.x - repeatCount1
+        if opts.x < 1 then
+            opts.x = 1
         end
-    end
-    drawFile()
-    oldx = nil
+        opts.wantX = nil
+        return opts
+    end)
 end)
-registerAction("j", function()
-    resetLastSearch()
-    if oldx ~= nil then
-        currCursorX = oldx - currXOffset
-    else
-        oldx = currCursorX + currXOffset
-    end
-    currCursorY = currCursorY + repeatCount1
-    if currCursorY + currFileOffset > #filelines then
-        currCursorY = #filelines
-        currFileOffset = 0
-    end
-    if currCursorX + currXOffset > #(filelines[currCursorY + currFileOffset]) + 1 then
-        if filelines[currCursorY + currFileOffset] ~= "" then
-            currCursorX = #(filelines[currCursorY + currFileOffset]) + 1 - currXOffset
+registerMotionMulti({{"j", "<down>"}}, function()
+    return {}, (function(opts)
+        if opts.linewise == nil then  -- preserve false
+            opts.linewise = true
+        end
+        if opts.wantX ~= nil then
+            opts.x = opts.wantX
         else
-            currCursorX = 1
-            currXOffset = 0
+            opts.wantX = opts.x
         end
-    end
-    if currCursorX < 1 then
-        while currCursorX < 1 do
-            currXOffset = currXOffset - 1
-            currCursorX = currCursorX + 1
+        opts.y = opts.y + repeatCount1
+        if opts.y > #filelines then
+            opts.y = #filelines
         end
-    elseif currCursorX + lineoffset > wid then
-        while currCursorX + lineoffset > wid do
-            currXOffset = currXOffset + 1
-            currCursorX = currCursorX - 1
+        local line = filelines[opts.y]
+        if opts.x > #line + 1 then
+            opts.x = #line + 1
         end
-    end
-    while currCursorY > hig - 1 do
-        currCursorY = currCursorY - 1
-        currFileOffset = currFileOffset + 1
-    end
-    drawFile(repeatCount1 > 1)  -- Force redraw to avoid phantom cursor
+        return opts
+    end)
 end)
-registerAction("k", function()
-    resetLastSearch()
-    if oldx ~= nil then
-        currCursorX = oldx - currXOffset
-    else
-        oldx = currCursorX + currXOffset
-    end
-    currCursorY = currCursorY - repeatCount1
-    if currCursorY + currFileOffset < 1 then
-        currCursorY = 1
-        currFileOffset = 0
-    end
-    if currCursorX + currXOffset > #(filelines[currCursorY + currFileOffset]) + 1 then
-        if filelines[currCursorY + currFileOffset] ~= "" then
-            currCursorX = #(filelines[currCursorY + currFileOffset]) + 1 - currXOffset
+registerMotionMulti({{"k", "<up>"}}, function()
+    return {}, (function(opts)
+        if opts.linewise == nil then  -- preserve false
+            opts.linewise = true
+        end
+        if opts.wantX ~= nil then
+            opts.x = opts.wantX
         else
-            currCursorX = 1
-            currXOffset = 0
+            opts.wantX = opts.x
         end
-    end
-    if currCursorX < 1 then
-        while currCursorX < 1 do
-            currXOffset = currXOffset - 1
-            currCursorX = currCursorX + 1
+        opts.y = opts.y - repeatCount1
+        if opts.y < 1 then
+            opts.y = 1
         end
-    elseif currCursorX + lineoffset > wid then
-        while currCursorX + lineoffset > wid do
-            currXOffset = currXOffset + 1
-            currCursorX = currCursorX - 1
+        local line = filelines[opts.y]
+        if opts.x > #line + 1 then
+            opts.x = #line + 1
         end
-    end
-    while currCursorY < 1 do
-        currCursorY = currCursorY + 1
-        currFileOffset = currFileOffset - 1
-    end
-    while currFileOffset < 0 do
-        currFileOffset = currFileOffset + 1
-    end
-    drawFile(repeatCount1 > 1)  -- Force redraw to avoid phantom cursor
+        return opts
+    end)
 end)
-registerAction("l", function()
-    resetLastSearch()
-    currCursorX = currCursorX + repeatCount1
-    local line = filelines[currCursorY + currFileOffset]
-    if line ~= nil then
-        if currCursorX + currXOffset > #line then
-            currXOffset = 0
-            currCursorX = #filelines[currCursorY + currFileOffset] + 1
+registerMotionMulti({{"l", "<right>"}}, function()
+    return {exclusive = true}, (function(opts)
+        opts.x = opts.x + repeatCount1
+        if opts.x < 1 then
+            opts.x = 1
         end
-        if currCursorX + lineoffset > wid then
-            local delta = wid - currCursorX - lineoffset
-            currCursorX = currCursorX + delta
-            currXOffset = currXOffset - delta
-        end
-        drawFile()
-    end
-    oldx = nil
+        local line = filelines[opts.y]
+        opts.wantX = nil
+        return opts
+    end)
 end)
-registerAction("H", function()
-            currCursorY = 1
-            drawFile(true)
-        end)
-registerAction("M", function()
-            currCursorY = math.floor((hig - 1) / 2)
-            drawFile(true)
-        end)
-registerAction("L", function()
-            currCursorY = hig - 1
-            drawFile(true)
-        end)
+registerMotion("H", {}, function(opts)
+    if opts.linewise == nil then
+        opts.linewise = true
+    end
+    opts.y = currFileOffset + 1
+    if opts.y < 1 then
+        opts.y = 1
+    elseif opts.y > #filelines then
+        opts.y = #filelines
+    end
+    local line = filelines[opts.y]
+    opts.x = line:find("[^ \x09]") or #line
+    if opts.x < 1 then
+        opts.x = 1
+    end
+    opts.wantX = nil
+    return opts
+end)
+registerMotion("M", {}, function(opts)
+    if opts.linewise == nil then
+        opts.linewise = true
+    end
+    opts.y = currFileOffset + math.floor((hig - 1) / 2)
+    if opts.y < 1 then
+        opts.y = 1
+    elseif opts.y > #filelines then
+        opts.y = #filelines
+    end
+    local line = filelines[opts.y]
+    opts.x = line:find("[^ \x09]") or #line
+    if opts.x < 1 then
+        opts.x = 1
+    end
+    opts.wantX = nil
+    return opts
+end)
+registerMotion("L", {}, function(opts)
+    if opts.linewise == nil then
+        opts.linewise = true
+    end
+    opts.y = currFileOffset + (hig - 1)
+    if opts.y < 1 then
+        opts.y = 1
+    elseif opts.y > #filelines then
+        opts.y = #filelines
+    end
+    local line = filelines[opts.y]
+    opts.x = line:find("[^ \x09]") or #line
+    if opts.x < 1 then
+        opts.x = 1
+    end
+    opts.wantX = nil
+    return opts
+end)
 registerAction("r", function()
             local chr = pullTypeaheadCharMode("i")
             filelines[currCursorY + currFileOffset] = string.sub(filelines[currCursorY + currFileOffset], 1, currCursorX + currXOffset - 1) .. chr .. string.sub(filelines[currCursorY + currFileOffset], currCursorX + currXOffset + 1, #(filelines[currCursorY + currFileOffset]))
@@ -3206,44 +3572,34 @@ registerAction("ZZ", function()
                     running = false
                 end
             end)
+local cutTextObject
+local yankTextObject
 registerAction("yy", function()
-    local count = #filelines - currCursorY - currFileOffset + 1
-    if count > repeatCount1 then
-        count = repeatCount1
-    end
-    copybuffer = {}
-    for i = 1, count, 1 do
-        table.insert(copybuffer, #copybuffer + 1, filelines[currCursorY + currFileOffset + i - 1])
-    end
-    copytype = "linetable"
+    resetLastSearch()
+    yankTextObject(textObjectLine())
 end)
-registerAction("yw", function()
-                local word,beg,ed = str.wordOfPos(filelines[currCursorY + currFileOffset], currCursorX + currXOffset)
-                copybuffer = word
-                if ed ~= #filelines[currCursorY + currFileOffset] then
-                    copybuffer = copybuffer .. " "
-                end
-                copytype = "text"
-            end)
-registerAction("yiw", function()
-                    local word,beg,ed = str.wordOfPos(filelines[currCursorY + currFileOffset], currCursorX + currXOffset)
-                    copybuffer = word
-                    copytype = "text"
-                end)
-registerAction("yaw", function()
-                    local word,beg,ed = str.wordOfPos(filelines[currCursorY + currFileOffset], currCursorX + currXOffset)
-                    copybuffer = word
-                    if ed ~= #filelines[currCursorY + currFileOffset] then
-                        copybuffer = copybuffer .. " "
-                    elseif beg ~= 1 then
-                        copybuffer = " " .. copybuffer
-                    end
-                    copytype = "text"
-                end)
-registerAction("y$", function()
-                copybuffer = string.sub(filelines[currCursorY + currFileOffset], currCursorX + currXOffset, #filelines[currCursorY + currFileOffset])
-                copytype = "text"
-            end)
+registerAction("y", function()
+    resetLastSearch()
+    local to = pullTextObject()
+    if to == nil then
+        sendMsg("No text object")
+        return
+    end
+    local prevCurY = currCursorY
+    yankTextObject(to, true)
+    scrollToCursor()
+    local dy = currCursorY - prevCurY
+    drawFile(dy < -1 or dy > 1)
+end)
+registerVisualAction("y", function()
+    resetLastSearch()
+    yankTextObject(textObjectLine())
+    return true
+end)
+registerAction("Y", function()
+    resetLastSearch()
+    yankTextObject(textObjectEOL())  -- drop Vi compatibility
+end)
 registerAction("x", function()
     local beg = currCursorX + currXOffset
     local ed = beg + repeatCount1 - 1
@@ -3285,70 +3641,218 @@ function resetLastSearch()
             lastSearchLine = nil
         end
 local afterDelete
-registerAction("dd", function() resetLastSearch()
-    local count = #filelines - currCursorY - currFileOffset + 1
-    if count > repeatCount1 then
-        count = repeatCount1
-    end
-    copybuffer = {}
-    for i = 1, count, 1 do
-        table.insert(copybuffer, #copybuffer + 1, filelines[currCursorY + currFileOffset + i - 1])
-    end
-    copytype = "linetable"
-    for i = 1, count, 1 do
-        table.remove(filelines, currCursorY + currFileOffset)
-    end
-    if #filelines < 1 then
-        filelines[1] = ""
-    end
-    fileContents[currfile]["unsavedchanges"] = true
-    afterDelete()
+registerAction("dd", function()
+    resetLastSearch()
+    cutTextObject(textObjectLine())
 end)
-registerAction("dw", function() resetLastSearch()
-                local word,beg,ed = str.wordOfPos(filelines[currCursorY + currFileOffset], currCursorX + currXOffset)
-                copybuffer = word
-                if ed ~= #filelines[currCursorY + currFileOffset] then
-                    copybuffer = copybuffer .. " "
+registerAction("d", function()
+    resetLastSearch()
+    local to = pullTextObject()
+    if to == nil then
+        sendMsg("No text object")
+        return
+    end
+    cutTextObject(to)
+end)
+registerVisualAction("d", function()
+    resetLastSearch()
+    cutTextObject(visualModeState)
+    return true
+end)
+function cutTextObject(to, settings)
+    settings = settings or {}
+    local addLine = settings.addLine or false
+    local onePastEOL = settings.onePastEOL or false
+    local begX, begY, edX, edY = to.initialX, to.initialY, to.x, to.y
+    if edY < begY or edY == begY and edX < begX then
+        begX, edX = edX, begX
+        begY, edY = edY, begY
+    end
+    if to.linewise then
+        copybuffer = {}
+        for i = begY, edY do
+            table.insert(copybuffer, #copybuffer + 1, filelines[i])
+        end
+        copytype = "linetable"
+        for _ = begY, edY do
+            table.remove(filelines, begY)
+        end
+        fileContents[currfile]["unsavedchanges"] = true
+        if currCursorY + currFileOffset > begY then
+            if currCursorY + currFileOffset > edY then
+                currCursorY = currCursorY - (edY - begY) - 1
+            else
+                currCursorY = begY - currFileOffset
+            end
+        end
+        if addLine or #filelines < 1 then
+            local i = currCursorY + currFileOffset
+            if i > #filelines + 1 then
+                i = #filelines + 1
+            elseif i < 1 then
+                i = 1
+            end
+            local newLine = ""
+            if autoindent then
+                local protoLine = filelines[i - 1] or filelines[i] or ""
+                local indentedamount = (protoLine:find("[^ \x09]") or #protoLine + 1) - 1
+                newLine = protoLine:sub(1, indentedamount)
+            end
+            table.insert(filelines, i, newLine)
+            currCursorX = #newLine - currXOffset
+            if onePastEOL then
+                currCursorX = currCursorX + 1
+            end
+        end
+    else
+        if to.exclusive then
+            edX = edX - 1
+            if begY == edY and edX < begX then
+                -- push undo state
+                return true
+            end
+            if edX < 1 then
+                edY = edY - 1
+                -- SAFETY: edY >= 1 because begY >= 1 and edY >= begY
+                edX = #filelines[edY]
+            end
+        end
+        if begY ~= edY then
+            local begLine = filelines[begY]
+            local edLine = filelines[edY]
+            copybuffer = {begLine:sub(begX), edLine:sub(1, edX)}
+            for i = begY + 1, edY - 1 do
+                table.insert(copybuffer, #copybuffer, filelines[i])
+            end
+            copytype = "texttable"
+            filelines[begY] = begLine:sub(1, begX - 1) .. edLine:sub(edX + 1)
+            for _ = begY + 1, edY do
+                table.remove(filelines, begY + 1)
+            end
+            fileContents[currfile]["unsavedchanges"] = true
+            if begY == currCursorY + currFileOffset and currCursorX + currXOffset > begX or currCursorY + currFileOffset > begY then
+                if edY == currCursorY + currFileOffset and currCursorX + currXOffset > edX  then
+                    currCursorX = currCursorX - edX + begX - 1
+                    currCursorY = begY - currFileOffset
+                elseif currCursorY + currFileOffset > edY then
+                    currCursorY = currCursorY - (edY - begY)
+                else
+                    currCursorX = begX - currXOffset
+                    currCursorY = begY - currFileOffset
                 end
-                copytype = "text"
-                if ed ~= #filelines[currCursorY + currFileOffset] then
-                    ed = ed + 1
+            end
+        else
+            local line = filelines[begY]
+            copybuffer = string.sub(line, begX, edX)
+            copytype = "text"
+            filelines[begY] = string.sub(line, 1, begX - 1) .. string.sub(line, edX + 1, #line)
+            fileContents[currfile]["unsavedchanges"] = true
+            if begY == currCursorY + currFileOffset and currCursorX + currXOffset > begX then
+                if currCursorX + currXOffset > edX then
+                    currCursorX = currCursorX - (edX - begX + 1)
+                else
+                    currCursorX = begX - currXOffset
                 end
-                currCursorX = beg - 1
-                filelines[currCursorY + currFileOffset] = string.sub(filelines[currCursorY + currFileOffset], 1, beg - 1) .. string.sub(filelines[currCursorY + currFileOffset], ed + 1, #filelines[currCursorY + currFileOffset])
-                fileContents[currfile]["unsavedchanges"] = true
-            afterDelete() end)
-registerAction("diw", function() resetLastSearch() local word, beg, ed
-                local word,beg,ed
-                    word,beg,ed = str.wordOfPos(filelines[currCursorY + currFileOffset], currCursorX + currXOffset)
-                    copybuffer = word
-                    copytype = "text"
-                    filelines[currCursorY + currFileOffset] = string.sub(filelines[currCursorY + currFileOffset], 1, beg - 1) .. string.sub(filelines[currCursorY + currFileOffset], ed + 1, #filelines[currCursorY + currFileOffset])
-                    fileContents[currfile]["unsavedchanges"] = true
-                    currCursorX = beg - 1
-                afterDelete() end)
-registerAction("daw", function() resetLastSearch()
-                    local word,beg,ed = str.wordOfPos(filelines[currCursorY + currFileOffset], currCursorX + currXOffset)
-                    copybuffer = word
-                    if ed ~= #filelines[currCursorY + currFileOffset] then
-                        copybuffer = copybuffer .. " "
-                        ed = ed + 1
-                    elseif beg ~= 1 then
-                        copybuffer = " " .. copybuffer
-                        beg = beg - 1
-                    end
-                    copytype = "text"
-                    currCursorX = beg - 1
-                    filelines[currCursorY + currFileOffset] = string.sub(filelines[currCursorY + currFileOffset], 1, beg - 1) .. string.sub(filelines[currCursorY + currFileOffset], ed + 1, #filelines[currCursorY + currFileOffset])
-                    fileContents[currfile]["unsavedchanges"] = true
-                afterDelete() end)
-registerAction("d$", function() resetLastSearch()
-                copybuffer = string.sub(filelines[currCursorY + currFileOffset], currCursorX + currXOffset, #filelines[currCursorY + currFileOffset])
-                copytype = "text"
-                filelines[currCursorY + currFileOffset] = string.sub(filelines[currCursorY + currFileOffset], 1, currCursorX + currXOffset - 1)
-                fileContents[currfile]["unsavedchanges"] = true
-            afterDelete() end)
-function afterDelete()
+            end
+        end
+    end
+    afterDelete({onePastEOL = onePastEOL})
+    return true
+end
+function yankTextObject(to, jumpBeg)
+    local begX, begY, edX, edY = to.initialX, to.initialY, to.x, to.y
+    if edY < begY or edY == begY and edX < begX then
+        begX, edX = edX, begX
+        begY, edY = edY, begY
+    end
+    if to.linewise then
+        copybuffer = {}
+        for i = begY, edY do
+            table.insert(copybuffer, #copybuffer + 1, filelines[i])
+        end
+        copytype = "linetable"
+        if jumpBeg then
+            currCursorY = begY
+        end
+    else
+        if to.exclusive then
+            edX = edX - 1
+            if begY == edY and edX < begX then
+                if jumpBeg then
+                    currCursorX = begX
+                    currCursorY = begY
+                end
+                return true
+            end
+            if edX < 1 then
+                edY = edY - 1
+                -- SAFETY: edY >= 1 because begY >= 1 and edY >= begY
+                edX = #filelines[edY]
+            end
+        end
+        if begY ~= edY then
+            local begLine = filelines[begY]
+            local edLine = filelines[edY]
+            copybuffer = {begLine:sub(begX), edLine:sub(1, edX)}
+            for i = begY + 1, edY - 1 do
+                table.insert(copybuffer, #copybuffer, filelines[i])
+            end
+            copytype = "texttable"
+        else
+            local line = filelines[begY]
+            copybuffer = string.sub(line, begX, edX)
+            copytype = "text"
+        end
+    end
+    if jumpBeg then
+        currCursorX = begX
+        currCursorY = begY
+    end
+    return true
+end
+registerTextObjectMulti({{"i", "a"}, {"w", "W"}}, function(lst)
+    local extendSpaces = lst[1] == "a"
+    local nopunc = lst[2] == "w"
+    return {exclusive = false, linewise = false}, (function(opts)
+        -- Currently without repetition/extension
+        opts.initialX = opts.initialX or opts.x
+        opts.initialY = opts.initialY or opts.y
+        local line = filelines[opts.y]
+        local word, beg, ed = str.wordOfPos(line, opts.x, nopunc)
+        if extendSpaces then
+            local extLeft, extRight = 0, 0
+            local _, len = line:sub(ed + 1):find("^[ \x09]+")
+            if len then
+                extRight = len
+            else
+                local matchBeg, matchEd = line:sub(1, beg - 1):find("[ \x09]+$")
+                if matchBeg then
+                    extLeft = matchEd - matchBeg + 1
+                end
+            end
+            beg = beg - extLeft
+            ed = ed + extRight
+        end
+        local backward = opts.y < opts.initialY or opts.y == opts.initialY and opts.x < opts.initialX
+        if backward then
+            if opts.x > beg then
+                opts.x = beg
+            end
+            if opts.initialY == opts.y and opts.initialX < ed then
+                opts.initialX = ed
+            end
+        else
+            if opts.x < ed then
+                opts.x = ed
+            end
+            if opts.initialY == opts.y and opts.initialX > beg then
+                opts.initialX = beg
+            end
+        end
+        return opts
+    end)
+end)
+function afterDelete(settings)
             while currCursorY + currFileOffset > #filelines do
                 currCursorY = currCursorY - 1
                 if currCursorY < 1 then
@@ -3358,7 +3862,11 @@ function afterDelete()
                     end
                 end
             end
-            while currCursorX + currXOffset > #filelines[currCursorY + currFileOffset] do
+            local lineLength = #filelines[currCursorY + currFileOffset]
+            if settings.onePastEOL then
+                lineLength = lineLength + 1
+            end
+            while currCursorX + currXOffset > lineLength do
                 currCursorX = currCursorX - 1
                 if currCursorX < 1 then
                     while currCursorX < 1 do
@@ -3371,15 +3879,9 @@ function afterDelete()
             drawFile(true)
         end
 registerAction("D", function()
-            lastSearchPos = nil
-            lastSearchLine = nil
-            copybuffer = string.sub(filelines[currCursorY + currFileOffset], currCursorX + currXOffset, #filelines[currCursorY + currFileOffset])
-            copytype = "text"
-            filelines[currCursorY + currFileOffset] = string.sub(filelines[currCursorY + currFileOffset], 1, currCursorX + currXOffset - 1)
-            drawFile()
-            recalcMLCs()
-            fileContents[currfile]["unsavedchanges"] = true
-        end)
+    resetLastSearch()
+    cutTextObject(textObjectEOL())
+end)
 registerAction("p", function()
             lastSearchPos = nil
             lastSearchLine = nil
@@ -3395,6 +3897,17 @@ registerAction("p", function()
             elseif copytype == "linetable" then
                 for i=#copybuffer,1,-1 do
                     table.insert(filelines, currCursorY + currFileOffset + 1, copybuffer[i])
+                end
+            elseif copytype == "texttable" then
+                if #copybuffer > 0 then
+                    local line = filelines[currCursorY + currFileOffset]
+                    local prefix = line:sub(1, currCursorX + currXOffset)
+                    local suffix = line:sub(currCursorX + currXOffset + 1, #line)
+                    filelines[currCursorY + currFileOffset] = prefix .. copybuffer[1]
+                    for i = #copybuffer, 2, -1 do
+                        table.insert(filelines, currCursorY + currFileOffset + 1, copybuffer[i])
+                    end
+                    filelines[currCursorY + currFileOffset + #copybuffer - 1] = filelines[currCursorY + currFileOffset + #copybuffer - 1] .. suffix
                 end
             end
             recalcMLCs(true)
@@ -3424,31 +3937,35 @@ registerAction("P", function()
                     currCursorY = currCursorY - 1
                     currFileOffset = currFileOffset + 1
                 end
+            elseif copytype == "texttable" then
+                if #copybuffer > 0 then
+                    local line = filelines[currCursorY + currFileOffset]
+                    local prefix = line:sub(1, currCursorX + currXOffset - 1)
+                    local suffix = line:sub(currCursorX + currXOffset, #line)
+                    filelines[currCursorY + currFileOffset] = copybuffer[#copybuffer] .. suffix
+                    for i = #copybuffer - 1, 1, -1 do
+                        table.insert(filelines, currCursorY + currFileOffset, copybuffer[i])
+                    end
+                    filelines[currCursorY + currFileOffset] = prefix .. filelines[currCursorY + currFileOffset]
+                    currCursorY = currCursorY + #copybuffer - 1
+                    if #copybuffer > 1 then
+                        currCursorX = #copybuffer[#copybuffer] + 1 - currXOffset
+                    else
+                        currCursorX = currCursorX + #copybuffer[1]
+                    end
+                    scrollToCursor()
+                end
             end
             recalcMLCs(true)
             drawFile(true)
             fileContents[currfile]["unsavedchanges"] = true
         end)
-registerAction("$", function()
-            lastSearchPos = nil
-            lastSearchLine = nil
-            oldx = 999999999
-            currCursorX = #filelines[currCursorY + currFileOffset]
-            currXOffset = 0
-            while currCursorX + lineoffset > wid do
-                currCursorX = currCursorX - 1
-                currXOffset = currXOffset + 1
-            end
-            drawFile()
-        end)
-registerAction("0", function()
-            lastSearchPos = nil
-            lastSearchLine = nil
-            currCursorX = 1
-            currXOffset = 0
-            oldx = nil
-            drawFile()
-        end)
+registerMotion("$", {exclusive = false}, textObjectEOL)
+registerMotion("0", {exclusive = true}, function(opts)
+    opts.wantX = nil
+    opts.x = 1
+    return opts
+end)
 registerAction("gJ", function() resetLastSearch()
                 filelines[currCursorY + currFileOffset] = filelines[currCursorY + currFileOffset] .. filelines[currCursorY + currFileOffset + 1]
                 table.remove(filelines, currCursorY + currFileOffset + 1)
@@ -3456,60 +3973,49 @@ registerAction("gJ", function() resetLastSearch()
                 drawFile(true)
                 fileContents[currfile]["unsavedchanges"] = true
             end)
-registerAction("gg", function() resetLastSearch()
-                currCursorY = repeatCount1
-                currFileOffset = 0
-                currCursorX = 1
-                currXOffset = 0
-                while currCursorY > hig - 1 do
-                    currCursorY = currCursorY - 1
-                    currFileOffset = currFileOffset + 1
-                end
-                drawFile()
-            end)
-registerActionMulti({{"g"}, {"e", "E"}}, function(lst)
+registerMotion("gg", {}, function(opts)
+    if opts.linewise == nil then  -- preserve false
+        opts.linewise = true
+    end
+    opts.y = repeatCount1
+    if opts.y > #filelines then
+        opts.y = #filelines
+    end
+    local line = filelines[opts.y]
+    opts.x = line:find("[^ \x09]") or #line
+    if opts.x < 1 then
+        opts.x = 1
+    end
+    opts.wantX = nil
+    return opts
+end)
+registerMotionMulti({{"g"}, {"e", "E"}}, function(lst)
     local c = lst[2]
-    return (function() resetLastSearch()
-            for i = 1, repeatCount1, 1 do
-                local begs = str.wordEnds(filelines[currCursorY + currFileOffset], not string.match(c, "%u"))
-                if begs[#begs] then
-                    if currCursorX + currXOffset > begs[1] then
-                        currCursorX = currCursorX - 1
-                        while not tab.find(begs, currCursorX + currXOffset) do
-                            currCursorX = currCursorX - 1
-                        end
-                        while currCursorX < 1 do
-                            currCursorX = currCursorX + 1
-                            currXOffset = currXOffset - 1
-                        end
-                        oldx = currCursorX + currXOffset
+    return {exclusive = false}, (function(opts)
+        for i = 1, repeatCount1, 1 do
+            local begs = str.wordEnds(filelines[opts.y], not string.match(c, "%u"))
+            if begs[#begs] then
+                if opts.x > begs[1] then
+                    opts.x = opts.x - 1
+                    while not tab.find(begs, opts.x) do
+                        opts.x = opts.x - 1
                     end
+                    opts.wantX = opts.x
                 end
             end
-            drawFile()
-        end)
+        end
+        return opts
     end)
-registerAction("g_", function() resetLastSearch()
-                currCursorX = #filelines[currCursorY + currFileOffset]
-                currXOffset = 0
-                local i = currCursorX
-                while string.sub(filelines[currCursorY + currFileOffset], i, i) == " " do
-                    i = i - 1
-                end
-                currCursorX = i
-                if currCursorX + lineoffset > wid then
-                    while currCursorX + lineoffset > wid do
-                        currCursorX = currCursorX - 1
-                        currXOffset = currXOffset + 1
-                    end
-                elseif currCursorX < 1 then
-                    while currCursorX < 1 do
-                        currCursorX = currCursorX + 1
-                        currXOffset = currXOffset - 1
-                    end
-                end
-                drawFile()
-            end)
+end)
+registerMotion("g_", {}, function(opts)
+    local line = filelines[opts.y]
+    local lastNonBlank = (line:find("[ \x09]*$") or #line + 1) - 1
+    if lastNonBlank > 0 then
+        opts.x = lastNonBlank
+    else
+        opts.x = 1
+    end
+end)
 registerAction("gt", function()
     resetLastSearch()
     if repeatCount0 > 0 then
@@ -3522,135 +4028,107 @@ registerAction("gT", function()
     resetLastSearch()
     switchToFile(currfile - 1)
 end)
-registerAction("G", function()
-    resetLastSearch()
+registerMotion("G", {}, function(opts)
+    if opts.linewise == nil then  -- preserve false
+        opts.linewise = true
+    end
     if repeatCount0 > 0 then
-        currCursorY = repeatCount0
+        opts.y = repeatCount0
     else
-        currCursorY = #filelines
+        opts.y = #filelines
     end
-    currFileOffset = 0
-    currCursorX = 1
-    currXOffset = 0
-    while currCursorY > hig - 1 do
-        currCursorY = currCursorY - 1
-        currFileOffset = currFileOffset + 1
+    if opts.y > #filelines then
+        opts.y = #filelines
     end
-    drawFile()
+    local line = filelines[opts.y]
+    opts.x = line:find("[^ \x09]") or #line
+    if opts.x < 1 then
+        opts.x = 1
+    end
+    opts.wantX = nil
+    return opts
 end)
-registerActionMulti({{"w", "W"}}, function(lst)
+registerMotionMulti({{"w", "W"}}, function(lst)
     local var1 = lst[1]
-    return (function ()
-        resetLastSearch()
+    return {exclusive = true}, (function(opts)
         for i = 1, repeatCount1, 1 do
-            local begs = str.wordBeginnings(filelines[currCursorY + currFileOffset], not string.match(var1, "%u"))
+            local begs = str.wordBeginnings(filelines[opts.y], not string.match(var1, "%u"))
             if begs[#begs] then
-                if currCursorX + currXOffset < begs[#begs] then
-                    currCursorX = currCursorX + 1
-                    while not tab.find(begs, currCursorX + currXOffset) do
-                        currCursorX = currCursorX + 1
+                if opts.x < begs[#begs] then
+                    opts.x = opts.x + 1
+                    while not tab.find(begs, opts.x) do
+                        opts.x = opts.x + 1
                     end
-                    while currCursorX + lineoffset > wid do
-                        currCursorX = currCursorX - 1
-                        currXOffset = currXOffset + 1
-                    end
-                    oldx = currCursorX + currXOffset
-                    drawFile()
+                    opts.wantX = opts.x
                 end
             end
         end
+        return opts
     end)
 end)
-registerActionMulti({{"e", "E"}}, function(lst)
+registerMotionMulti({{"e", "E"}}, function(lst)
     local var1 = lst[1]
-    return (function ()
-        resetLastSearch()
+    return {exclusive = false}, (function(opts)
         for i = 1, repeatCount1, 1 do
-            local begs = str.wordEnds(filelines[currCursorY + currFileOffset], not string.match(var1, "%u"))
+            local begs = str.wordEnds(filelines[opts.y], not string.match(var1, "%u"))
             if begs[#begs] then
-                if currCursorX + currXOffset < begs[#begs] then
-                    currCursorX = currCursorX + 1
-                    while not tab.find(begs, currCursorX + currXOffset) do
-                        currCursorX = currCursorX + 1
+                if opts.x < begs[#begs] then
+                    opts.x = opts.x + 1
+                    while not tab.find(begs, opts.x) do
+                        opts.x = opts.x + 1
                     end
-                    while currCursorX + lineoffset > wid do
-                        currCursorX = currCursorX - 1
-                        currXOffset = currXOffset + 1
-                    end
-                    oldx = currCursorX + currXOffset
-                    drawFile()
+                    opts.wantX = opts.x
                 end
             end
         end
+        return opts
     end)
 end)
-registerActionMulti({{"b", "B"}}, function(lst)
+registerMotionMulti({{"b", "B"}}, function(lst)
     local var1 = lst[1]
-    return (function ()
-        resetLastSearch()
+    return {exclusive = true}, (function (opts)
         for i = 1, repeatCount1, 1 do
-            local begs = str.wordBeginnings(filelines[currCursorY + currFileOffset], not string.match(var1, "%u"))
+            local begs = str.wordBeginnings(filelines[opts.y], not string.match(var1, "%u"))
             if begs[1] then
-                if currCursorX + currXOffset > begs[1] then
-                    currCursorX = currCursorX - 1
-                    while not tab.find(begs, currCursorX + currXOffset) do
-                        currCursorX = currCursorX - 1
+                if opts.x > begs[1] then
+                    opts.x = opts.x - 1
+                    while not tab.find(begs, opts.x) do
+                        opts.x = opts.x - 1
                     end
-                    while currCursorX < 1 do
-                        currCursorX = currCursorX + 1
-                        currXOffset = currXOffset - 1
-                    end
-                    oldx = currCursorX + currXOffset
+                    opts.wantX = opts.x
                 end
             end
         end
-        drawFile()
+        return opts
     end)
 end)
-registerAction("^", function()
-            lastSearchPos = nil
-            lastSearchLine = nil
-            currCursorX = 1
-            currXOffset = 0
-            oldx = nil
-            local i = currCursorX
-            while string.sub(filelines[currCursorY + currFileOffset], i, i) == " " and i < #filelines[currCursorY + currFileOffset] do
-                i = i + 1
-            end
-            currCursorX = i
-            while currCursorX + lineoffset > wid do
-                currCursorX = currCursorX - 1
-                currXOffset = currXOffset + 1
-            end
-            drawFile()
-        end)
-registerActionMulti({{"f", "t"}}, function(lst)
-    local var1 = lst[1]
-    return (function ()
-        resetLastSearch()
-        local c = pullTypeaheadCharMode("i")
-        local idx = str.indicesOfLetter(filelines[currCursorY + currFileOffset], c)
+registerMotion("^", {exclusive = true}, function(opts)
+    opts.wantX = nil
+    local line = filelines[opts.y]
+    opts.x = line:find("[^ \x09]") or #line
+    if opts.x < 1 then
+        opts.x = 1
+    end
+    return opts
+end)
+local function textObjectCharacterFind(var1, c, opts)
+    if var1 == "f" or var1 == "t" then
+        local idx = str.indicesOfLetter(filelines[opts.y], c)
         for i = 1, repeatCount1, 1 do
             if #idx > 0 then
-                if currCursorX + currFileOffset < idx[#idx] - jumpoffset then
-                    local oldcursor = currCursorX
-                    currCursorX = currCursorX + (1 + jumpoffset)
-                    oldx = nil
-                    while not tab.find(idx, currCursorX + currXOffset) and currCursorX + currXOffset < #filelines[currCursorY + currFileOffset] do
-                        currCursorX = currCursorX + 1
+                if opts.x < idx[#idx] - jumpoffset then
+                    local oldcursor = opts.x
+                    opts.x = opts.x + (1 + jumpoffset)
+                    opts.wantX = nil
+                    while not tab.find(idx, opts.x) and opts.x < #filelines[opts.y] do
+                        opts.x = opts.x + 1
                     end
-                    if not tab.find(idx, currCursorX + currXOffset) then
-                        currCursorX = oldcursor
+                    if not tab.find(idx, opts.x) then
+                        opts.x = oldcursor
                     end
                     if var1 == "t" then
-                        currCursorX = currCursorX - 1
+                        opts.x = opts.x - 1
                     end
-                    while currCursorX + lineoffset > wid do
-                        currCursorX = currCursorX - 1
-                        currXOffset = currXOffset + 1
-                    end
-                    drawFile()
-                    jumpbuffer = {var1, c}
                     if var1 == "t" then
                         jumpoffset = 1
                     else
@@ -3659,31 +4137,19 @@ registerActionMulti({{"f", "t"}}, function(lst)
                 end
             end
         end
-    end)
-end)
-registerActionMulti({{"F", "T"}}, function(lst)
-    local var1 = lst[1]
-    return (function ()
-            resetLastSearch()
-            local c = pullTypeaheadCharMode("i")
-            local idx = str.indicesOfLetter(filelines[currCursorY + currFileOffset], c)
-            -- TODO Figure out if the lack of repetition is intentional
+    elseif var1 == "F" or var1 == "T" then
+        local idx = str.indicesOfLetter(filelines[opts.y], c)
+        for i = 1, repeatCount1, 1 do
             if #idx > 0 then
-                if currCursorX + currFileOffset > idx[1] + jumpoffset then
-                    currCursorX = currCursorX - (1 + jumpoffset)
-                    oldx = nil
-                    while not tab.find(idx, currCursorX + currXOffset) and currCursorX > 1 do
-                        currCursorX = currCursorX - 1
+                if opts.x > idx[1] + jumpoffset then
+                    opts.x = opts.x - (1 + jumpoffset)
+                    opts.wantX = nil
+                    while not tab.find(idx, opts.x) and opts.x > 1 do
+                        opts.x = opts.x - 1
                     end
                     if var1 == "T" then
-                        currCursorX = currCursorX + 1
+                        opts.x = opts.x + 1
                     end
-                    while currCursorX < 1 do
-                        currCursorX = currCursorX + 1
-                        currXOffset = currXOffset - 1
-                    end
-                    drawFile()
-                    jumpbuffer = {var1, c}
                     if var1 == "T" then
                         jumpoffset = 1
                     else
@@ -3691,8 +4157,37 @@ registerActionMulti({{"F", "T"}}, function(lst)
                     end
                 end
             end
-        end)
+        end
+    end
+    return opts
+end
+registerMotionMulti({{"f", "t", "F", "T"}}, function(lst)
+    local var1 = lst[1]
+    return {exclusive = var1 == "F" or var1 == "T"}, (function (opts)
+        local c = pullTypeaheadCharMode("i")
+        jumpbuffer = {var1, c}
+        return textObjectCharacterFind(var1, c, opts)
     end)
+end)
+registerMotion(";", {}, function(opts)
+    local kind = jumpbuffer[1]
+    if kind == "f" or kind == "t" or kind == "F" or kind == "T" then
+        return textObjectCharacterFind(kind, jumpbuffer[2], opts)
+    end
+    return opts
+end)
+registerMotion(",", {}, function(opts)
+    local kind = jumpbuffer[1]
+    if kind == nil then
+        return opts
+    end
+    kind = ({f = "F", t = "T", F = "f", T = "t"})[kind]
+    if kind then
+        return textObjectCharacterFind(kind, jumpbuffer[2], opts)
+    end
+    return opts
+end)
+--[[ FIXME why does it have a second implementation?
 registerActionMulti({{"F", "T"}}, function(lst)
     local var1 = lst[1]
     return (function ()
@@ -3753,53 +4248,38 @@ registerActionMulti({{"F", "T"}}, function(lst)
             end
         end)
     end)
-registerAction("cc", function() resetLastSearch()
-                filelines[currCursorY + currFileOffset] = ""
-                currCursorX = 1
-                currXOffset = 0
-                recalcMLCs()
-                drawFile()
-                fileContents[currfile]["unsavedchanges"] = true
-                insertMode()
-            end)
-registerAction("c$", function() resetLastSearch()
-                filelines[currCursorY + currFileOffset] = string.sub(filelines[currCursorY + currFileOffset], 1, currCursorX + currXOffset - 1)
-                recalcMLCs()
-                drawFile()
-                fileContents[currfile]["unsavedchanges"] = true
-                insertMode()
-            end)
-registerAction("ciw", function() resetLastSearch()
-                    local word,beg,ed = str.wordOfPos(filelines[currCursorY + currFileOffset], currCursorX + currXOffset)
-                    filelines[currCursorY + currFileOffset] = string.sub(filelines[currCursorY + currFileOffset], 1, beg - 1) .. string.sub(filelines[currCursorY + currFileOffset], ed + 1, #filelines[currCursorY + currFileOffset])
-                    currCursorX = beg
-                    currXOffset = 0
-                    while currCursorX + lineoffset > wid do
-                        currCursorX = currCursorX - 1
-                        currXOffset = currXOffset + 1
-                    end
-                    recalcMLCs()
-                    drawFile()
-                    fileContents[currfile]["unsavedchanges"] = true
-                    insertMode()
-                end)
-registerActionMulti({{"cw", "ce"}}, function(_)
-    return function() resetLastSearch()
-                local word, beg, ed = str.wordOfPos(filelines[currCursorY + currFileOffset], currCursorX + currXOffset)
-                filelines[currCursorY + currFileOffset] = string.sub(filelines[currCursorY + currFileOffset], 1, currCursorX + currXOffset - 1).. string.sub(filelines[currCursorY + currFileOffset], ed + 1, #filelines[currCursorY + currFileOffset])
-                recalcMLCs()
-                drawFile()
-                fileContents[currfile]["unsavedchanges"] = true
-                insertMode()
-            end
-        end)
+]]
+registerAction("cc", function()
+    resetLastSearch()
+    if cutTextObject(textObjectLine(), {addLine = true, onePastEOL = true}) then
+        insertMode()
+    end
+end)
+registerAction("c", function()
+    resetLastSearch()
+    local to = pullTextObject()
+    if to == nil then
+        sendMsg("No text object")
+        return
+    end
+    if cutTextObject(to, {addLine = true, onePastEOL = true}) then
+        insertMode()
+    end
+end)
+registerVisualAction("c", function()
+    resetLastSearch()
+    if cutTextObject(visualModeState, {addLine = true, onePastEOL = true}) then
+        visualSelectionRendered = false
+        insertMode()
+    end
+    return true
+end)
 registerAction("C", function()
-            filelines[currCursorY + currFileOffset] = string.sub(filelines[currCursorY + currFileOffset], 1, currCursorX + currXOffset - 1)
-            recalcMLCs()
-            drawFile()
-            fileContents[currfile]["unsavedchanges"] = true
-            insertMode()
-        end)
+    resetLastSearch()
+    if cutTextObject(textObjectEOL(), {onePastEOL = true}) then
+        insertMode()
+    end
+end)
 registerAction("s", function()
             filelines[currCursorY + currFileOffset] = string.sub(filelines[currCursorY + currFileOffset], 1, currCursorX + currXOffset - 1) .. string.sub(filelines[currCursorY + currFileOffset], currCursorX + currXOffset + 1, #filelines[currCursorY + currFileOffset])
             recalcMLCs()
@@ -3821,75 +4301,56 @@ registerAction("S", function()
             fileContents[currfile]["unsavedchanges"] = true
             insertMode()
         end)
-registerAction("%", function()
-            lastSearchPos = nil
-            lastSearchLine = nil
-            local startpos = {currCursorX, currXOffset, currCursorY, currFileOffset}
-            local startbracket = string.sub(filelines[currCursorY + currFileOffset], currCursorX + currXOffset, currCursorX + currXOffset)
-            local endbracket = ""
-            if startbracket == "(" then
-                endbracket = ")"
-            elseif startbracket == "{" then
-                endbracket = "}"
-            elseif startbracket == "[" then
-                endbracket = "]"
-            else
-                endbracket = nil
-            end
-            if endbracket then
-                local extrabrackets = 0
-                local continuefor = true
-                currCursorX = currCursorX + 1
-                setcolors(colors.black, colors.white)
-                for i=currCursorY + currFileOffset,#filelines,1 do
-                    if continuefor then
-                        while currCursorX + currXOffset <= #filelines[currCursorY + currFileOffset] do
-                            if string.sub(filelines[currCursorY + currFileOffset], currCursorX + currXOffset, currCursorX + currXOffset) == startbracket then
-                                extrabrackets = extrabrackets + 1
-                            elseif string.sub(filelines[currCursorY + currFileOffset], currCursorX + currXOffset, currCursorX + currXOffset) == endbracket then
-                                if extrabrackets > 0 then
-                                    extrabrackets = extrabrackets - 1
-                                else
-                                    extrabrackets = extrabrackets - 1
-                                end
-                            end
-                            currCursorX = currCursorX + 1
-                        end
-                        if (string.sub(filelines[currCursorY + currFileOffset], currCursorX + currXOffset, currCursorX + currXOffset) == endbracket and extrabrackets == 0) or extrabrackets < 0 then
-                            if currCursorX > 1 then
-                                currCursorX = currCursorX - 1
-                            end
-                            continuefor = false
+registerMotion("%", {exclusive = false}, function(opts)
+    local startpos = {opts.x, opts.y}
+    local startbracket = string.sub(filelines[opts.y], opts.x, opts.x)
+    local endbracket = ""
+    if startbracket == "(" then
+        endbracket = ")"
+    elseif startbracket == "{" then
+        endbracket = "}"
+    elseif startbracket == "[" then
+        endbracket = "]"
+    else
+        endbracket = nil
+    end
+    if endbracket then
+        local extrabrackets = 0
+        local continuefor = true
+        opts.x = opts.x + 1
+        for i = opts.y, #filelines, 1 do
+            if continuefor then
+                while opts.x <= #filelines[opts.y] do
+                    if string.sub(filelines[opts.y], opts.x, opts.x) == startbracket then
+                        extrabrackets = extrabrackets + 1
+                    elseif string.sub(filelines[opts.y], opts.x, opts.x) == endbracket then
+                        if extrabrackets > 0 then
+                            extrabrackets = extrabrackets - 1
                         else
-                            currCursorX = 1
-                            currXOffset = 0
-                            if #filelines > 1 then
-                                currCursorY = currCursorY + 1
-                            end
+                            extrabrackets = extrabrackets - 1
                         end
+                    end
+                    opts.x = opts.x + 1
+                end
+                if (string.sub(filelines[opts.y], opts.x, opts.x) == endbracket and extrabrackets == 0) or extrabrackets < 0 then
+                    if opts.x > 1 then
+                        opts.x = opts.x - 1
+                    end
+                    continuefor = false
+                else
+                    opts.x = 1
+                    if #filelines > 1 then
+                        opts.y = opts.y + 1
                     end
                 end
             end
-            while currCursorX < 1 do
-                currCursorX = currCursorX + 1
-                currXOffset = currXOffset - 1
-            end
-            while currCursorX > wid - lineoffset do
-                currCursorX = currCursorX - 1
-                currXOffset = currXOffset + 1
-            end
-            while currCursorY > hig - 1 do
-                currCursorY = currCursorY - 1
-                currFileOffset = currFileOffset + 1
-            end
-            drawFile(true)
-            if not string.sub(filelines[currCursorY + currFileOffset], currCursorX + currXOffset, currCursorX + currXOffset) == endbracket then
-                currCursorX = startpos[1]
-                currXOffset = startpos[2]
-                currCursorY = startpos[3]
-                currFileOffset = startpos[4]
-            end
-        end)
+        end
+    end
+    if not string.sub(filelines[opts.y], opts.x, opts.x) == endbracket then
+        opts.x = startpos[1]
+        opts.y = startpos[2]
+    end
+end)
 registerAction("/", function()
             search("forward")
         end)
@@ -3910,25 +4371,20 @@ registerAction("#", function()
             local currword = str.wordOfPos(filelines[currCursorY + currFileOffset], currCursorX + currXOffset, true)
             search("backward", false, currword)
         end)
--- TODO also handle repetitions
-registerAction("<left>", moveCursorLeft)
-registerAction("<right>", function() moveCursorRight(1) end)
-registerAction("<up>", moveCursorUp)
-registerAction("<down>", moveCursorDown)
 
-registerAction("<C-u>", function()
+registerNormalVisualAction("<C-u>", function()
     if repeatCount0 > 0 then
         scrollOption = repeatCount0
     end
     scrollWindowY(-scrollOption, true)
 end)
-registerAction("<C-d>", function()
+registerNormalVisualAction("<C-d>", function()
     if repeatCount0 > 0 then
         scrollOption = repeatCount0
     end
     scrollWindowY(scrollOption, true)
 end)
-registerAction("<C-b>", function()
+registerNormalVisualAction("<C-b>", function()
     local multiplier = hig - 3
     if multiplier < 1 then
         multiplier = 1
@@ -3936,7 +4392,7 @@ registerAction("<C-b>", function()
     local amount = multiplier * repeatCount1 + 2
     scrollWindowY(-amount, false)
 end)
-registerAction("<C-f>", function()
+registerNormalVisualAction("<C-f>", function()
     local multiplier = hig - 3
     if multiplier < 1 then
         multiplier = 1
@@ -3944,19 +4400,19 @@ registerAction("<C-f>", function()
     local amount = multiplier * repeatCount1 + 2
     scrollWindowY(amount, false)
 end)
-registerAction("<C-y>", function()
+registerNormalVisualAction("<C-y>", function()
     scrollWindowY(-repeatCount1, false)
 end)
-registerAction("<C-e>", function()
+registerNormalVisualAction("<C-e>", function()
     scrollWindowY(repeatCount1, false)
 end)
-registerAction("<scrollwheelup>", function()
+registerNormalVisualAction("<scrollwheelup>", function()
     scrollWindowY(-repeatCount1 * 3, false)
 end)
-registerAction("<scrollwheeldown>", function()
+registerNormalVisualAction("<scrollwheeldown>", function()
     scrollWindowY(repeatCount1 * 3, false)
 end)
-registerAction("<S-scrollwheelup>", function()
+registerNormalVisualAction("<S-scrollwheelup>", function()
     local multiplier = hig - 3
     if multiplier < 1 then
         multiplier = 1
@@ -3964,7 +4420,7 @@ registerAction("<S-scrollwheelup>", function()
     local amount = multiplier * repeatCount1 + 2
     scrollWindowY(-amount, false)
 end)
-registerAction("<S-scrollwheeldown>", function()
+registerNormalVisualAction("<S-scrollwheeldown>", function()
     local multiplier = hig - 3
     if multiplier < 1 then
         multiplier = 1
@@ -3972,7 +4428,7 @@ registerAction("<S-scrollwheeldown>", function()
     local amount = multiplier * repeatCount1 + 2
     scrollWindowY(amount, false)
 end)
-registerAction("<pageup>", function()
+registerNormalVisualAction("<pageup>", function()
     local multiplier = hig - 3
     if multiplier < 1 then
         multiplier = 1
@@ -3980,7 +4436,7 @@ registerAction("<pageup>", function()
     local amount = multiplier * repeatCount1 + 2
     scrollWindowY(-amount, false)
 end)
-registerAction("<pagedown>", function()
+registerNormalVisualAction("<pagedown>", function()
     local multiplier = hig - 3
     if multiplier < 1 then
         multiplier = 1
@@ -3989,19 +4445,17 @@ registerAction("<pagedown>", function()
     scrollWindowY(amount, false)
 end)
 
-registerAction("<leftmouse>", function()
-    resetLastSearch()
-    currCursorX = inputProperties.mouseX - lineoffset
-    currCursorY = inputProperties.mouseY
-    if currCursorY + currFileOffset > #filelines then
-        currCursorY = #filelines - currFileOffset
+registerMotion("<leftmouse>", {exclusive = true}, function(opts)
+    opts.x = inputProperties.mouseX + currXOffset - lineoffset
+    opts.y = inputProperties.mouseY + currFileOffset
+    if opts.y > #filelines then
+        opts.y = #filelines
     end
-    local line = filelines[currCursorY + currFileOffset]
-    oldx = currCursorX + currXOffset
-    if line and #line < currCursorX + currXOffset then
-        currCursorX = #line - currXOffset
+    local line = filelines[opts.y]
+    opts.wantX = opts.x
+    if line and #line < opts.x then
+        opts.x = #line
     end
-    redrawTerm()
 end)
 
 registerAction(">>", function()
@@ -4057,8 +4511,67 @@ registerAction("<C-S-v>", function()
     expandPaste()
 end)
 
+registerVisualAction("v", function()
+    if visualModeState.linewise then
+        visualModeState.linewise = false
+        return false
+    else
+        return true
+    end
+end)
+
+registerVisualAction("V", function()
+    if not visualModeState.linewise then
+        visualModeState.linewise = true
+        return false
+    else
+        return true
+    end
+end)
+
+registerVisualAction("v", function()
+    if visualModeState.linewise then
+        visualModeState.linewise = false
+        return false
+    else
+        return true
+    end
+end)
+
+registerAction("gv", function()
+    visualMode()
+end)
+
+registerAction("v", function()
+    visualModeState = {linewise = false}
+    visualMode()
+end)
+
+registerAction("V", function()
+    visualModeState = {linewise = true}
+    visualMode()
+end)
+
+registerVisualAction("o", function()
+    visualModeState.x, visualModeState.initialX = visualModeState.initialX, visualModeState.x
+    visualModeState.y, visualModeState.initialY = visualModeState.initialY, visualModeState.y
+    return false
+end)
+
+registerVisualAction("O", function()
+    visualModeState.x, visualModeState.initialX = visualModeState.initialX, visualModeState.x
+    return false
+end)
+
 function normalModeSingle()
-    local cons = actionsTrie:consumer()
+    local prevMode = currentMode
+    currentMode = "n"
+    local prio = {action = 2, motion = 1, max = 2}
+    local cons = Trie.Consumer.new{
+        n = prio.max,
+        [prio.action] = actionsTrie,
+        [prio.motion] = motionsTrie,
+    }
     local i = 0
     local prefix = {}
     local countStr = pullCount()
@@ -4094,19 +4607,26 @@ function normalModeSingle()
         end
     end
     if cons ~= nil then
-        local len, action = cons:getDeepest()
+        local len, action, kind = cons:getDeepest()
         if len > 0 then
             for _ = 1, len do
                 pullTypeahead()
             end
-            action()
+            if kind == prio.action then
+                action()
+            elseif kind == prio.motion then
+                performMotion(action[0], action[1])
+            end
+            currentMode = prevMode
             return true
         else
             -- Drop one key
             pullTypeahead()
+            currentMode = prevMode
             return false
         end
     else
+        currentMode = prevMode
         return false
     end
 end
