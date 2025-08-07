@@ -3994,14 +3994,14 @@ registerMotionMulti({{"g"}, {"e", "E"}}, function(lst)
     return {exclusive = false}, (function(opts)
         for i = 1, repeatCount1, 1 do
             local begs = str.wordEnds(filelines[opts.y], not string.match(c, "%u"))
-            if begs[#begs] then
-                if opts.x > begs[1] then
+            if begs[#begs] and opts.x > begs[1] then
+                opts.x = opts.x - 1
+                while not tab.find(begs, opts.x) do
                     opts.x = opts.x - 1
-                    while not tab.find(begs, opts.x) do
-                        opts.x = opts.x - 1
-                    end
-                    opts.wantX = opts.x
                 end
+                opts.wantX = opts.x
+            else
+                opts.x = 1
             end
         end
         return opts
@@ -4053,14 +4053,14 @@ registerMotionMulti({{"w", "W"}}, function(lst)
     return {exclusive = true}, (function(opts)
         for i = 1, repeatCount1, 1 do
             local begs = str.wordBeginnings(filelines[opts.y], not string.match(var1, "%u"))
-            if begs[#begs] then
-                if opts.x < begs[#begs] then
+            if begs[#begs] and opts.x < begs[#begs] then
+                opts.x = opts.x + 1
+                while not tab.find(begs, opts.x) do
                     opts.x = opts.x + 1
-                    while not tab.find(begs, opts.x) do
-                        opts.x = opts.x + 1
-                    end
-                    opts.wantX = opts.x
                 end
+                opts.wantX = opts.x
+            else
+                opts.x = #filelines[opts.y] + 1  -- one past end, alternatively consider setting exclusive = false
             end
         end
         return opts
