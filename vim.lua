@@ -105,6 +105,7 @@ local modeMappings = {
     i = Trie.new(),
     c = Trie.new(),
     o = Trie.new(),
+    x = Trie.new(),
 }
 local mappingCommands = {
     map = {mode = "", remap = true},
@@ -113,12 +114,16 @@ local mappingCommands = {
     imap = {mode = "i", remap = true},
     cmap = {mode = "c", remap = true},
     omap = {mode = "o", remap = true},
+    xmap = {mode = "x", remap = true},
+    vmap = {mode = "x", remap = true},
     noremap = {mode = "", remap = false},
     ["noremap!"] = {mode = "!", remap = false},
     nnoremap = {mode = "n", remap = false},
     inoremap = {mode = "i", remap = false},
     cnoremap = {mode = "c", remap = false},
     onoremap = {mode = "o", remap = false},
+    xnoremap = {mode = "x", remap = false},
+    vnoremap = {mode = "x", remap = false},
 }
 local currentMode = "n"
 local noremapFor = 0
@@ -140,6 +145,8 @@ local repeatCount1 = 1
 local scrollOption = 10
 local shiftWidth = 4
 local modeMsg
+local visualSelectionRendered
+local visualModeState = {}  -- Stored as a text object
 local typeahead = {}  -- String keys and pseudokeys
 local typeaheadUpdates = {}  -- Mouse position updates
 local inputProperties = {mouseX = 1, mouseY = 1, pasteData = ""}
@@ -150,6 +157,7 @@ local useTmKeyboards = false
 local actionsTrie = Trie.new()  -- Generic Normal-mode handlers
 local motionsTrie = Trie.new()  -- Normal & operator-pending -mode 
 local textObjectsTrie = Trie.new()  -- Only operator-pending-mode 
+local visualActionsTrie = Trie.new()  -- Generic Visual-mode handlers 
 local keyNamesTranslation = {
     backspace = "bs",
     enter = "cr",
@@ -327,13 +335,24 @@ local function registerTextObjectMulti(components, getOptsCb)
     end
 end
 
+local function registerVisualAction(seq, cb)
+    local key = keyseq.parseKeySequence(seq, keyNormalisation, modifierOrder)
+    visualActionsTrie:put(key, cb)
+end
+
+local function registerVisualActionMulti(components, getCb)
+    for _, lst in itertools.product(components) do
+        registerVisualAction(table.concat(lst), getCb(lst))
+    end
+end
+
 local function registerMapping(src, dst, opts)
     opts = opts or {}
     local srcArr = keyseq.parseKeySequence(src, keyNormalisation, modifierOrder)
     local dstArr = keyseq.parseKeySequence(dst, keyNormalisation, modifierOrder)
     local mode = opts.mode or ""
     if mode == "" then
-        mode = "no"
+        mode = "nox"
     elseif mode == "!" then
         mode = "ic"
     end
@@ -877,6 +896,137 @@ local function setModeMsg(msg)
     end
 end
 
+local function drawFileLine(i)
+    setpos(1, i - currFileOffset)
+    if filelines then
+        local lineVisualBeg = 0
+        local lineVisualEd = 0
+        if filelines[i] ~= nil then
+            if visualSelectionRendered and visualModeState then
+                local begX, begY, edX, edY = visualModeState.initialX, visualModeState.initialY, visualModeState.x, visualModeState.y
+                if begX and begY and edX and edY then
+                    if edY < begY or edY == begY and edX < begX then
+                        begX, edX = edX, begX
+                        begY, edY = edY, begY
+                    end
+                end
+                if visualModeState.linewise then
+                    if i >= begY and i <= edY then
+                        lineVisualBeg = 1
+                        lineVisualEd = #filelines[i]
+                    end
+                else
+                    if i >= begY and i <= edY then
+                        lineVisualBeg = 1
+                        lineVisualEd = #filelines[i]
+                    end
+                    if i == begY then
+                        lineVisualBeg = begX
+                    end
+                    if i == edY then
+                        lineVisualEd = edX
+                    end
+                end
+            end
+            setcolors(colors.black, colors.white)
+            if fileContents[currfile] then
+                if fileContents[currfile]["filetype"] and syntaxhighlighting and filetypearr[fileContents[currfile]["filetype"]] then
+                    -- TODO visual selection
+                    local synt = filetypearr[fileContents[currfile]["filetype"]].syntax()
+                    local wordsOfLine = str.split(filelines[i], " ")
+                    setpos(1 - currXOffset + lineoffset, i - currFileOffset)
+                    for j=1,#wordsOfLine,1 do
+                        if tab.find(synt[1], wordsOfLine[j]) then
+                            setcolors(colors.yellow, colors.blue)
+                        elseif tab.find(synt[2][1], wordsOfLine[j]) then
+                            setcolors(colors.black, colors.lightBlue)
+                        elseif tab.find(synt[2][2], wordsOfLine[j]) then
+                            setcolors(colors.black, colors.purple)
+                        else
+                            setcolors(colors.black, colors.white)
+                        end
+                        write(wordsOfLine[j])
+                        if j ~= #wordsOfLine then
+                            setcolors(colors.black, colors.white)
+                            write(" ")
+                        end
+                    end
+                    --another loop for drawing strings
+                    setpos(1 - currXOffset + lineoffset, i - currFileOffset)
+                    local quotationmarks = str.indicesOfLetter(filelines[i], synt[3])
+                    local inquotes = false
+                    local justset = false
+                    local quotepoints = {}
+                    setcolors(colors.black, colors.red)
+                    for j=1,#filelines[i],1 do
+                        local writechar = not ((1 - currXOffset - lineoffset + j - 1 < 1) or (1 - currXOffset + lineoffset + j - 1 > wid))
+                        if writechar then
+                            setpos(1 - currXOffset + lineoffset + j - 1, i - currFileOffset)
+                        end
+                        if tab.find(quotationmarks, j) then
+                            if not inquotes then
+                                if j < quotationmarks[#quotationmarks] then
+                                    inquotes = true
+                                    justset = true
+                                end
+                            end
+                        end
+                        if inquotes then
+                            if writechar then
+                                write(string.sub(filelines[i], j, j))
+                            end
+                            table.insert(quotepoints, #quotepoints, j - 2) --Don't know why I need to subtract 2 but heck it works
+                        end
+                        if tab.find(quotationmarks, j) and not justset then
+                            if inquotes then
+                                inquotes = false
+                            end
+                        end
+                        justset = false
+                    end
+                    local commentstart = 0
+                    commentstart = str.find(filelines[i], synt[4], quotepoints)
+                    if commentstart and commentstart ~= false then
+                        setpos(1 - currXOffset + lineoffset + commentstart - 1, i - currFileOffset)
+                        setcolors(colors.black, colors.green)
+                        write(string.sub(filelines[i], commentstart, #filelines[i]))
+                    end
+                    commentstart = str.find(filelines[i], synt[7][2])
+                    if not commentstart then
+                        commentstart = 0
+                    end
+                    if not lowspec then
+                        if tab.find(fileContents[currfile]["Multi-line comments"][2], i) then
+                            setpos(1 - currXOffset + lineoffset, i - currFileOffset)
+                            setcolors(colors.black, colors.green)
+                            write(filelines[i])
+                        elseif tab.find(fileContents[currfile]["Multi-line comments"][3], i) then
+                            setpos(1 - currXOffset + lineoffset, i - currFileOffset)
+                            setcolors(colors.black, colors.green)
+                            write(string.sub(filelines[i], 1, commentstart + 1))
+                        end
+                    end
+                else
+                    setpos(1 - currXOffset + lineoffset, i - currFileOffset)
+                    if lineVisualBeg > 0 and lineVisualEd > 0 and lineVisualBeg <= lineVisualEd then
+                        setcolors(colors.black, colors.white)
+                        write(string.sub(filelines[i], 1, lineVisualBeg - 1))
+                        setcolors(colors.gray, colors.white)
+                        write(string.sub(filelines[i], lineVisualBeg, lineVisualEd))
+                        setcolors(colors.black, colors.white)
+                        write(string.sub(filelines[i], lineVisualEd + 1, #filelines[i]))
+                    else
+                        write(string.sub(filelines[i], 1, #filelines[i]))
+                    end
+                end
+            end
+        else
+            setcolors(colors.black, colors.purple)
+            write("~")
+        end
+    end
+end
+
 local function drawFile(forcedredraw)
     motd = false
     if currXOffset ~= oldXOffset or currFileOffset ~= oldFileOffset or forcedredraw then
@@ -886,96 +1036,7 @@ local function drawFile(forcedredraw)
         oldXOffset = currXOffset
         oldFileOffset = currFileOffset
         for i=currFileOffset,(hig - 1) + currFileOffset,1 do
-            setpos(1, i - currFileOffset)
-            if filelines then
-                if filelines[i] ~= nil then
-                    setcolors(colors.black, colors.white)
-                    if fileContents[currfile] then
-                        if fileContents[currfile]["filetype"] and syntaxhighlighting and filetypearr[fileContents[currfile]["filetype"]] then
-                            local synt = filetypearr[fileContents[currfile]["filetype"]].syntax()
-                            local wordsOfLine = str.split(filelines[i], " ")
-                            setpos(1 - currXOffset + lineoffset, i - currFileOffset)
-                            for j=1,#wordsOfLine,1 do
-                                if tab.find(synt[1], wordsOfLine[j]) then
-                                    setcolors(colors.yellow, colors.blue)
-                                elseif tab.find(synt[2][1], wordsOfLine[j]) then
-                                    setcolors(colors.black, colors.lightBlue)
-                                elseif tab.find(synt[2][2], wordsOfLine[j]) then
-                                    setcolors(colors.black, colors.purple)
-                                else
-                                    setcolors(colors.black, colors.white)
-                                end
-                                write(wordsOfLine[j])
-                                if j ~= #wordsOfLine then
-                                    setcolors(colors.black, colors.white)
-                                    write(" ")
-                                end
-                            end
-                            --another loop for drawing strings
-                            setpos(1 - currXOffset + lineoffset, i - currFileOffset)
-                            local quotationmarks = str.indicesOfLetter(filelines[i], synt[3])
-                            local inquotes = false
-                            local justset = false
-                            local quotepoints = {}
-                            setcolors(colors.black, colors.red)
-                            for j=1,#filelines[i],1 do
-                                local writechar = not ((1 - currXOffset - lineoffset + j - 1 < 1) or (1 - currXOffset + lineoffset + j - 1 > wid))
-                                if writechar then
-                                    setpos(1 - currXOffset + lineoffset + j - 1, i - currFileOffset)
-                                end
-                                if tab.find(quotationmarks, j) then
-                                    if not inquotes then
-                                        if j < quotationmarks[#quotationmarks] then
-                                            inquotes = true
-                                            justset = true
-                                        end
-                                    end
-                                end
-                                if inquotes then
-                                    if writechar then
-                                        write(string.sub(filelines[i], j, j))
-                                    end
-                                    table.insert(quotepoints, #quotepoints, j - 2) --Don't know why I need to subtract 2 but heck it works
-                                end
-                                if tab.find(quotationmarks, j) and not justset then
-                                    if inquotes then
-                                        inquotes = false
-                                    end
-                                end
-                                justset = false
-                            end
-                            local commentstart = 0
-                            commentstart = str.find(filelines[i], synt[4], quotepoints)
-                            if commentstart and commentstart ~= false then
-                                setpos(1 - currXOffset + lineoffset + commentstart - 1, i - currFileOffset)
-                                setcolors(colors.black, colors.green)
-                                write(string.sub(filelines[i], commentstart, #filelines[i]))
-                            end
-                            commentstart = str.find(filelines[i], synt[7][2])
-                            if not commentstart then
-                                commentstart = 0
-                            end
-                            if not lowspec then
-                                if tab.find(fileContents[currfile]["Multi-line comments"][2], i) then
-                                    setpos(1 - currXOffset + lineoffset, i - currFileOffset)
-                                    setcolors(colors.black, colors.green)
-                                    write(filelines[i])
-                                elseif tab.find(fileContents[currfile]["Multi-line comments"][3], i) then
-                                    setpos(1 - currXOffset + lineoffset, i - currFileOffset)
-                                    setcolors(colors.black, colors.green)
-                                    write(string.sub(filelines[i], 1, commentstart + 1))
-                                end
-                            end
-                        else
-                            setpos(1 - currXOffset + lineoffset, i - currFileOffset)
-                            write(string.sub(filelines[i], 1, #filelines[i]))
-                        end
-                    end
-                else
-                    setcolors(colors.black, colors.purple)
-                    write("~")
-                end
-            end
+            drawFileLine(i)
         end
     else
         --only draw 3 lines
@@ -983,95 +1044,7 @@ local function drawFile(forcedredraw)
             if i - currFileOffset < hig then
                 clearScreenLine(i - currFileOffset)
                 setpos(1, i - currFileOffset)
-                if filelines then
-                    if filelines[i] ~= nil then
-                        setcolors(colors.black, colors.white)
-                        if fileContents[currfile] then
-                            if fileContents[currfile]["filetype"] and syntaxhighlighting and filetypearr[fileContents[currfile]["filetype"]] then
-                                local synt = filetypearr[fileContents[currfile]["filetype"]].syntax()
-                                local wordsOfLine = str.split(filelines[i], " ")
-                                setpos(1 - currXOffset + lineoffset, i - currFileOffset)
-                                for j=1,#wordsOfLine,1 do
-                                    if tab.find(synt[1], wordsOfLine[j]) then
-                                        setcolors(colors.yellow, colors.blue)
-                                    elseif tab.find(synt[2][1], wordsOfLine[j]) then
-                                        setcolors(colors.black, colors.lightBlue)
-                                    elseif tab.find(synt[2][2], wordsOfLine[j]) then
-                                        setcolors(colors.black, colors.purple)
-                                    else
-                                        setcolors(colors.black, colors.white)
-                                    end
-                                    write(wordsOfLine[j])
-                                    if j ~= #wordsOfLine then
-                                        setcolors(colors.black, colors.white)
-                                        write(" ")
-                                    end
-                                end
-                                --another loop for drawing strings
-                                setpos(1 - currXOffset + lineoffset, i - currFileOffset)
-                                local quotationmarks = str.indicesOfLetter(filelines[i], synt[3])
-                                local inquotes = false
-                                local justset = false
-                                local quotepoints = {}
-                                setcolors(colors.black, colors.red)
-                                for j=1,#filelines[i],1 do
-                                    local writechar = not ((1 - currXOffset - lineoffset + j - 1 < 1) or (1 - currXOffset + lineoffset + j - 1 > wid))
-                                    if writechar then
-                                        setpos(1 - currXOffset + lineoffset + j - 1, i - currFileOffset)
-                                    end
-                                    if tab.find(quotationmarks, j) then
-                                        if not inquotes then
-                                            if j < quotationmarks[#quotationmarks] then
-                                                inquotes = true
-                                                justset = true
-                                            end
-                                        end
-                                    end
-                                    if inquotes then
-                                        if writechar then
-                                            write(string.sub(filelines[i], j, j))
-                                        end
-                                        table.insert(quotepoints, #quotepoints, j - 2)
-                                    end
-                                    if tab.find(quotationmarks, j) and not justset then
-                                        if inquotes then
-                                            inquotes = false
-                                        end
-                                    end
-                                    justset = false
-                                end
-                                local commentstart = 0
-                                commentstart = str.find(filelines[i], synt[4], quotepoints)
-                                if commentstart and commentstart ~= false then
-                                    setpos(1 - currXOffset + lineoffset + commentstart - 1, i - currFileOffset)
-                                    setcolors(colors.black, colors.green)
-                                    write(string.sub(filelines[i], commentstart, #filelines[i]))
-                                end
-                                commentstart = str.find(filelines[i], synt[7][2])
-                                if not commentstart then
-                                    commentstart = 0
-                                end
-                                if not lowspec then
-                                    if tab.find(fileContents[currfile]["Multi-line comments"][2], i) then
-                                        setpos(1 - currXOffset + lineoffset, i - currFileOffset)
-                                        setcolors(colors.black, colors.green)
-                                        write(filelines[i])
-                                    elseif tab.find(fileContents[currfile]["Multi-line comments"][3], i) then
-                                        setpos(1 - currXOffset + lineoffset, i - currFileOffset)
-                                        setcolors(colors.black, colors.green)
-                                        write(string.sub(filelines[i], 1, commentstart + 1))
-                                    end
-                                end
-                            else
-                                setpos(1 - currXOffset + lineoffset, i - currFileOffset)
-                                write(string.sub(filelines[i], 1, #filelines[i]))
-                            end
-                        end
-                    else
-                        setcolors(colors.black, colors.purple)
-                        write("~")
-                    end
-                end
+                drawFileLine(i)
             end
         end
     end
@@ -1674,6 +1647,133 @@ local function insertMode()
         -- mouse_click was already translated to tab by the pullTypeahead
         end
     end
+    setModeMsg(nil)
+    currentMode = prevMode
+end
+
+registerVisualAction("<tab>", function()
+    return true
+end)
+
+local function visualMode()
+    drawFile(true)
+    local prevMode = currentMode
+    currentMode = "x"
+    local visualModeRunning = true
+    local prio = {visualAction = 3, textObject = 2, motion = 1, max = 3}
+    local forcedredraw = true
+    while visualModeRunning do
+        visualModeState = visualModeState or {}
+        visualModeState.x = visualModeState.x or currCursorX + currXOffset
+        visualModeState.y = visualModeState.y or currCursorY + currFileOffset
+        visualModeState.initialX = visualModeState.initialX or visualModeState.x
+        visualModeState.initialY = visualModeState.initialY or visualModeState.y
+        visualModeState.exclusive = false
+        visualSelectionRendered = true
+        currCursorX = visualModeState.x - currXOffset
+        currCursorY = visualModeState.y - currFileOffset
+        oldx = visualModeState.wantX
+        scrollToCursor()
+        drawFile(forcedredraw)
+        if visualModeState.linewise then
+            setModeMsg("-- VISUAL LINE --")
+        else
+            setModeMsg("-- VISUAL --")
+        end
+        local cons = Trie.Consumer.new{
+            n = prio.max,
+            [prio.visualAction] = visualActionsTrie,
+            [prio.textObject] = textObjectsTrie,
+            [prio.motion] = motionsTrie,
+        }
+        local countStr = pullCount()
+        if #countStr > 0 then
+            repeatCount0 = tonumber(countStr)
+            repeatCount1 = repeatCount0
+        else
+            repeatCount0 = 0
+            repeatCount1 = 1
+        end
+        local i = 0
+        while true do
+            i = i + 1
+            local key
+            if i == 1 then
+                key = peekTypeaheadWRMP(i)
+            else
+                key = peekTypeahead(i)
+            end
+            if key == "C-c" then
+                -- Clear typeahead
+                for _ = 1, i do
+                    pullTypeahead()
+                end
+                cons = nil
+                visualModeRunning = false
+                break
+            end
+            if not cons:next(key) then
+                break
+            end
+            if not cons:hasNext() then
+                break
+            end
+        end
+        if cons ~= nil then
+            local len, entry, kind = cons:getDeepest()
+            if len > 0 then
+                for _ = 1, len do
+                    pullTypeahead()
+                end
+                local oldLinewise = visualModeState.linewise
+                local oldInitialX = visualModeState.initialX
+                local oldInitialY = visualModeState.initialY
+                local oldY = visualModeState.y
+                if kind == prio.visualAction then
+                    if entry() then
+                        visualModeRunning = false
+                    end
+                elseif kind == prio.textObject or kind == prio.motion then
+                    if entry[2] then
+                        itertools.update(visualModeState, entry[2])
+                    end
+                    visualModeState = entry[1](visualModeState) or visualModeState
+                end
+                visualModeState.exclusive = false
+                currCursorX = visualModeState.initialX or visualModeState.x
+                currCursorX = currCursorX - currXOffset
+                currCursorY = visualModeState.initialY or visualModeState.y
+                currCursorY = currCursorY - currFileOffset
+                cursorIntoFile()
+                visualModeState.initialX = currCursorX + currXOffset
+                visualModeState.initialY = currCursorY + currFileOffset
+                currCursorX = visualModeState.x
+                currCursorX = currCursorX - currXOffset
+                currCursorY = visualModeState.y
+                currCursorY = currCursorY - currFileOffset
+                cursorIntoFile()
+                visualModeState.x = currCursorX + currXOffset
+                visualModeState.y = currCursorY + currFileOffset
+                forcedredraw = false
+                if oldLinewise ~= visualModeState.linewise or oldInitialY ~= visualModeState.initialY then
+                    forcedredraw = true
+                elseif visualModeState.y - oldY > 1 or visualModeState.y - oldY < -1 then
+                    forcedredraw = true
+                elseif oldInitialX ~= visualModeState.initialX then
+                    forcedredraw = true
+                end
+            else
+                -- Drop one key
+                pullTypeahead()
+                opts = nil
+            end
+        else
+            visualModeRunning = false
+            break
+        end
+    end
+    visualSelectionRendered = false
+    drawFile(true)
     setModeMsg(nil)
     currentMode = prevMode
 end
@@ -3398,6 +3498,11 @@ registerAction("y", function()
     local dy = currCursorY - prevCurY
     drawFile(dy < -1 or dy > 1)
 end)
+registerVisualAction("y", function()
+    resetLastSearch()
+    yankTextObject(textObjectLine())
+    return true
+end)
 registerAction("Y", function()
     resetLastSearch()
     yankTextObject(textObjectEOL())  -- drop Vi compatibility
@@ -3455,6 +3560,11 @@ registerAction("d", function()
         return
     end
     cutTextObject(to)
+end)
+registerVisualAction("d", function()
+    resetLastSearch()
+    cutTextObject(visualModeState)
+    return true
 end)
 function cutTextObject(to, settings)
     settings = settings or {}
@@ -4062,6 +4172,14 @@ registerAction("c", function()
         insertMode()
     end
 end)
+registerVisualAction("c", function()
+    resetLastSearch()
+    if cutTextObject(visualModeState, {addLine = true, onePastEOL = true}) then
+        visualSelectionRendered = false
+        insertMode()
+    end
+    return true
+end)
 registerAction("C", function()
     resetLastSearch()
     if cutTextObject(textObjectEOL(), {onePastEOL = true}) then
@@ -4297,6 +4415,58 @@ end)
 -- By default paste content is interpreted as normal-mode keys, use mappings to change this behavior
 registerAction("<C-S-v>", function()
     expandPaste()
+end)
+
+registerVisualAction("v", function()
+    if visualModeState.linewise then
+        visualModeState.linewise = false
+        return false
+    else
+        return true
+    end
+end)
+
+registerVisualAction("V", function()
+    if not visualModeState.linewise then
+        visualModeState.linewise = true
+        return false
+    else
+        return true
+    end
+end)
+
+registerVisualAction("v", function()
+    if visualModeState.linewise then
+        visualModeState.linewise = false
+        return false
+    else
+        return true
+    end
+end)
+
+registerAction("gv", function()
+    visualMode()
+end)
+
+registerAction("v", function()
+    visualModeState = {linewise = false}
+    visualMode()
+end)
+
+registerAction("V", function()
+    visualModeState = {linewise = true}
+    visualMode()
+end)
+
+registerVisualAction("o", function()
+    visualModeState.x, visualModeState.initialX = visualModeState.initialX, visualModeState.x
+    visualModeState.y, visualModeState.initialY = visualModeState.initialY, visualModeState.y
+    return false
+end)
+
+registerVisualAction("O", function()
+    visualModeState.x, visualModeState.initialX = visualModeState.initialX, visualModeState.x
+    return false
 end)
 
 function normalModeSingle()
