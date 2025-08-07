@@ -908,7 +908,19 @@ local function setModeMsg(msg)
     end
 end
 
-local function drawFileLine(i)
+local function getMLCSetCache()
+    local mlc = fileContents[currfile]["Multi-line comments"]
+    if not mlc._setCache then
+        local cache = {}
+        for i = 1, 3 do
+            cache[i] = tab.itemIndices(mlc[i])
+        end
+        mlc._setCache = cache
+    end
+    return mlc._setCache
+end
+
+local function drawFileLine(i, synt)
     setpos(1, i - currFileOffset)
     if filelines then
         local lineVisualBeg = 0
@@ -942,9 +954,7 @@ local function drawFileLine(i)
             end
             setcolors(colors.black, colors.white)
             if fileContents[currfile] then
-                if fileContents[currfile]["filetype"] and syntaxhighlighting and filetypearr[fileContents[currfile]["filetype"]] then
-                    -- TODO visual selection
-                    local synt = filetypearr[fileContents[currfile]["filetype"]].syntax()
+                if synt then
                     local wordsOfLine = str.split(filelines[i], " ")
                     setpos(1 - currXOffset + lineoffset, i - currFileOffset)
                     local wordBeg = 1
@@ -953,11 +963,11 @@ local function drawFileLine(i)
                         wordBeg = wordEd + 2
                         wordEd = wordBeg + #wordsOfLine[j] - 1
                         local hlBg, hlFg = colors.black, colors.white
-                        if tab.find(synt[1], wordsOfLine[j]) then
+                        if synt.keywordSets.todo[wordsOfLine[j]] then
                             hlBg, hlFg = colors.yellow, colors.blue
-                        elseif tab.find(synt[2][1], wordsOfLine[j]) then
+                        elseif synt.keywordSets.statement[wordsOfLine[j]] then
                             hlBg, hlFg = colors.black, colors.lightBlue
-                        elseif tab.find(synt[2][2], wordsOfLine[j]) then
+                        elseif synt.keywordSets.preproc[wordsOfLine[j]] then
                             hlBg, hlFg = colors.black, colors.purple
                         end
                         if lineVisualEd < lineVisualBeg or wordBeg > lineVisualEd or wordEd < lineVisualBeg then
@@ -994,6 +1004,7 @@ local function drawFileLine(i)
                     --another loop for drawing strings
                     setpos(1 - currXOffset + lineoffset, i - currFileOffset)
                     local quotationmarks = str.indicesOfLetter(filelines[i], synt[3])
+                    local quoteSet = tab.itemIndices(quotationmarks)
                     local inquotes = false
                     local justset = false
                     local quotepoints = {}
@@ -1010,7 +1021,7 @@ local function drawFileLine(i)
                         if writechar then
                             setpos(1 - currXOffset + lineoffset + j - 1, i - currFileOffset)
                         end
-                        if tab.find(quotationmarks, j) then
+                        if quoteSet[j] then
                             if not inquotes then
                                 if j < quotationmarks[#quotationmarks] then
                                     inquotes = true
@@ -1024,7 +1035,7 @@ local function drawFileLine(i)
                             end
                             table.insert(quotepoints, #quotepoints, j - 2) --Don't know why I need to subtract 2 but heck it works
                         end
-                        if tab.find(quotationmarks, j) and not justset then
+                        if quoteSet[j] and not justset then
                             if inquotes then
                                 inquotes = false
                             end
@@ -1061,7 +1072,7 @@ local function drawFileLine(i)
                         commentstart = 0
                     end
                     if not lowspec then
-                        if tab.find(fileContents[currfile]["Multi-line comments"][2], i) then
+                        if getMLCSetCache()[2][i] then
                             setpos(1 - currXOffset + lineoffset, i - currFileOffset)
                             setcolors(colors.black, colors.green)
                             if lineVisualBeg > 0 and lineVisualEd > 0 and lineVisualBeg <= lineVisualEd then
@@ -1073,7 +1084,7 @@ local function drawFileLine(i)
                             else
                                 write(string.sub(filelines[i], 1, #filelines[i]))
                             end
-                        elseif tab.find(fileContents[currfile]["Multi-line comments"][3], i) then
+                        elseif getMLCSetCache()[3][i] then
                             setpos(1 - currXOffset + lineoffset, i - currFileOffset)
                             local commentText = string.sub(filelines[i], 1, commentstart + 1)
                             setcolors(colors.black, colors.green)
@@ -1111,6 +1122,17 @@ end
 
 local function drawFile(forcedredraw)
     motd = false
+    local synt = nil
+    if fileContents[currfile] and fileContents[currfile]["filetype"] and syntaxhighlighting and filetypearr[fileContents[currfile]["filetype"]] then
+        synt = filetypearr[fileContents[currfile]["filetype"]].syntax()
+        if synt then
+            synt.keywordSets = {
+                todo = tab.itemIndices(synt[1]),
+                statement = tab.itemIndices(synt[2][1]),
+                preproc = tab.itemIndices(synt[2][2]),
+            }
+        end
+    end
     if currXOffset ~= oldXOffset or currFileOffset ~= oldFileOffset or forcedredraw then
         for i=1,hig-1,1 do
             clearScreenLine(i)
@@ -1118,7 +1140,7 @@ local function drawFile(forcedredraw)
         oldXOffset = currXOffset
         oldFileOffset = currFileOffset
         for i=currFileOffset,(hig - 1) + currFileOffset,1 do
-            drawFileLine(i)
+            drawFileLine(i, synt)
         end
     else
         --only draw 3 lines
@@ -1126,7 +1148,7 @@ local function drawFile(forcedredraw)
             if i - currFileOffset < hig then
                 clearScreenLine(i - currFileOffset)
                 setpos(1, i - currFileOffset)
-                drawFileLine(i)
+                drawFileLine(i, synt)
             end
         end
     end
@@ -1410,6 +1432,7 @@ local function recalcMLCs(force, offsetby)
         fileContents[currfile]["Multi-line comments"] = {{}, {}, {}}
     end
     if not lowspec then
+        fileContents[currfile]["Multi-line comments"]._setCache = nil
         local synt
         if fileContents[currfile]["filetype"] then
             if fs.exists("/vim/syntax/"..fileContents[currfile]["filetype"]..".lua")then
@@ -1435,7 +1458,7 @@ local function recalcMLCs(force, offsetby)
                         fileContents[currfile]["Multi-line comments"][3][i] = fileContents[currfile]["Multi-line comments"][3][i] + offsetby[2]
                     end
                 end
-                if tab.find(fileContents[currfile]["Multi-line comments"][2], currCursorY + currFileOffset - 1) then
+                if getMLCSetCache()[2][currCursorY + currFileOffset - 1] then
                     --if the cursor - 1 is on a multi-line comment (type 2), then check if the current line contains the end of the comment.
                     --if it does, add it as type 3. If not, add it as type 2.
                     if str.find(fileContents[currfile][currCursorY + currFileOffset], "]]") then
@@ -1445,16 +1468,17 @@ local function recalcMLCs(force, offsetby)
                     end
                 end
             else
-                if ((tab.find(fileContents[currfile]["Multi-line comments"][1], currCursorY + currFileOffset) and not str.find(filelines[currCursorY + currFileOffset], synt[7][1])) or (not tab.find(fileContents[currfile]["Multi-line comments"][1], currCursorY + currFileOffset) and str.find(filelines[currCursorY + currFileOffset], synt[7][1])) or (tab.find(fileContents[currfile]["Multi-line comments"][3], currCursorY + currFileOffset) and not str.find(filelines[currCursorY + currFileOffset], synt[7][2])) or (not tab.find(fileContents[currfile]["Multi-line comments"][3], currCursorY + currFileOffset) and str.find(filelines[currCursorY + currFileOffset], synt[7][2])) or force) and syntaxhighlighting then
+                if ((getMLCSetCache()[1][currCursorY + currFileOffset] and not str.find(filelines[currCursorY + currFileOffset], synt[7][1])) or (not getMLCSetCache()[1][currCursorY + currFileOffset] and str.find(filelines[currCursorY + currFileOffset], synt[7][1])) or (getMLCSetCache()[3][currCursorY + currFileOffset] and not str.find(filelines[currCursorY + currFileOffset], synt[7][2])) or (not getMLCSetCache()[3][currCursorY + currFileOffset] and str.find(filelines[currCursorY + currFileOffset], synt[7][2])) or force) and syntaxhighlighting then
                     local multilinesInFile = {{}, {}, {}} --beginning quote points, regular quote points, end quote points
                     local quotepoints = {}
                     local justset = false
                     for j=1,#fileContents[currfile],1 do
                         local quotationmarks = str.indicesOfLetter(fileContents[currfile][j], synt[3])
+                        local quoteSet = tab.itemIndices(quotationmarks)
                         local inquotes = false
                         justset = false
                         for k=1,#fileContents[currfile][j],1 do
-                            if tab.find(quotationmarks, k) then
+                            if quoteSet[k] then
                                 if not inquotes then
                                     if k < quotationmarks[#quotationmarks] then
                                         inquotes = true
@@ -1465,7 +1489,7 @@ local function recalcMLCs(force, offsetby)
                             if inquotes then
                                 table.insert(quotepoints, #quotepoints, k - 2)
                             end
-                            if tab.find(quotationmarks, k) and not justset then
+                            if quoteSet[k] and not justset then
                                 if inquotes then
                                     inquotes = false
                                 end
@@ -2641,10 +2665,11 @@ if #decargs["files"] > 0 then
             local justset = false
             for j=1,#fileContents[i],1 do
                 local quotationmarks = str.indicesOfLetter(fileContents[i][j], synt[3])
+                local quoteSet = tab.itemIndices(quotationmarks)
                 local inquotes = false
                 justset = false
                 for k=1,#fileContents[i][j],1 do
-                    if tab.find(quotationmarks, k) then
+                    if quoteSet[k] then
                         if not inquotes then
                             if k < quotationmarks[#quotationmarks] then
                                 inquotes = true
@@ -2655,7 +2680,7 @@ if #decargs["files"] > 0 then
                     if inquotes then
                         table.insert(quotepoints, #quotepoints, k - 2)
                     end
-                    if tab.find(quotationmarks, k) and not justset then
+                    if quoteSet[k] and not justset then
                         if inquotes then
                             inquotes = false
                         end
@@ -3992,16 +4017,17 @@ end)
 registerMotionMulti({{"g"}, {"e", "E"}}, function(lst)
     local c = lst[2]
     return {exclusive = false}, (function(opts)
+        local begs = str.wordEnds(filelines[opts.y], not string.match(c, "%u"))
+        local begsSet = tab.itemIndices(begs)
         for i = 1, repeatCount1, 1 do
-            local begs = str.wordEnds(filelines[opts.y], not string.match(c, "%u"))
-            if begs[#begs] then
-                if opts.x > begs[1] then
+            if begs[#begs] and opts.x > begs[1] then
+                opts.x = opts.x - 1
+                while not begsSet[opts.x] do
                     opts.x = opts.x - 1
-                    while not tab.find(begs, opts.x) do
-                        opts.x = opts.x - 1
-                    end
-                    opts.wantX = opts.x
                 end
+                opts.wantX = opts.x
+            else
+                opts.x = 1
             end
         end
         return opts
@@ -4051,16 +4077,17 @@ end)
 registerMotionMulti({{"w", "W"}}, function(lst)
     local var1 = lst[1]
     return {exclusive = true}, (function(opts)
+        local begs = str.wordBeginnings(filelines[opts.y], not string.match(var1, "%u"))
+        local begsSet = tab.itemIndices(begs)
         for i = 1, repeatCount1, 1 do
-            local begs = str.wordBeginnings(filelines[opts.y], not string.match(var1, "%u"))
-            if begs[#begs] then
-                if opts.x < begs[#begs] then
+            if begs[#begs] and opts.x < begs[#begs] then
+                opts.x = opts.x + 1
+                while not begsSet[opts.x] do
                     opts.x = opts.x + 1
-                    while not tab.find(begs, opts.x) do
-                        opts.x = opts.x + 1
-                    end
-                    opts.wantX = opts.x
                 end
+                opts.wantX = opts.x
+            else
+                opts.x = #filelines[opts.y] + 1  -- one past end, alternatively consider setting exclusive = false
             end
         end
         return opts
@@ -4069,12 +4096,13 @@ end)
 registerMotionMulti({{"e", "E"}}, function(lst)
     local var1 = lst[1]
     return {exclusive = false}, (function(opts)
+        local begs = str.wordEnds(filelines[opts.y], not string.match(var1, "%u"))
+        local begsSet = tab.itemIndices(begs)
         for i = 1, repeatCount1, 1 do
-            local begs = str.wordEnds(filelines[opts.y], not string.match(var1, "%u"))
             if begs[#begs] then
                 if opts.x < begs[#begs] then
                     opts.x = opts.x + 1
-                    while not tab.find(begs, opts.x) do
+                    while not begsSet[opts.x] do
                         opts.x = opts.x + 1
                     end
                     opts.wantX = opts.x
@@ -4087,12 +4115,13 @@ end)
 registerMotionMulti({{"b", "B"}}, function(lst)
     local var1 = lst[1]
     return {exclusive = true}, (function (opts)
+        local begs = str.wordBeginnings(filelines[opts.y], not string.match(var1, "%u"))
+        local begsSet = tab.itemIndices(begs)
         for i = 1, repeatCount1, 1 do
-            local begs = str.wordBeginnings(filelines[opts.y], not string.match(var1, "%u"))
             if begs[1] then
                 if opts.x > begs[1] then
                     opts.x = opts.x - 1
-                    while not tab.find(begs, opts.x) do
+                    while not begsSet[opts.x] do
                         opts.x = opts.x - 1
                     end
                     opts.wantX = opts.x
@@ -4114,16 +4143,17 @@ end)
 local function textObjectCharacterFind(var1, c, opts)
     if var1 == "f" or var1 == "t" then
         local idx = str.indicesOfLetter(filelines[opts.y], c)
+        local idxSet = tab.itemIndices(idx)
         for i = 1, repeatCount1, 1 do
             if #idx > 0 then
                 if opts.x < idx[#idx] - jumpoffset then
                     local oldcursor = opts.x
                     opts.x = opts.x + (1 + jumpoffset)
                     opts.wantX = nil
-                    while not tab.find(idx, opts.x) and opts.x < #filelines[opts.y] do
+                    while not idxSet[opts.x] and opts.x < #filelines[opts.y] do
                         opts.x = opts.x + 1
                     end
-                    if not tab.find(idx, opts.x) then
+                    if not idxSet[opts.x] then
                         opts.x = oldcursor
                     end
                     if var1 == "t" then
@@ -4139,12 +4169,13 @@ local function textObjectCharacterFind(var1, c, opts)
         end
     elseif var1 == "F" or var1 == "T" then
         local idx = str.indicesOfLetter(filelines[opts.y], c)
+        local idxSet = tab.itemIndices(idx)
         for i = 1, repeatCount1, 1 do
             if #idx > 0 then
                 if opts.x > idx[1] + jumpoffset then
                     opts.x = opts.x - (1 + jumpoffset)
                     opts.wantX = nil
-                    while not tab.find(idx, opts.x) and opts.x > 1 do
+                    while not idxSet[opts.x] and opts.x > 1 do
                         opts.x = opts.x - 1
                     end
                     if var1 == "T" then

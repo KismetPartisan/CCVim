@@ -9,6 +9,18 @@ end
 
 local contains = find
 
+-- should be used instead of find when multiple queries are expected
+local function itemIndices(table)
+    local inversed = {}
+    for i=1,#table,1 do
+        local item = table[i]
+        if item ~= nil and not inversed[item] then
+            inversed[item] = i
+        end
+    end
+    return inversed
+end
+
 local function getLongestItem(table)
     local longest = ""
     for i=1,#table,1 do
@@ -21,10 +33,13 @@ end
 
 local function removeDuplicates(table)
     if table then
+        local visited = {}
         local outputtable = {}
         for i=1,#table,1 do
-            if not find(outputtable, table[i]) then
-                table.insert(outputtable, #outputtable + 1, table[i])
+            local item = table[i]
+            if not visited[item] then
+                table.insert(outputtable, #outputtable + 1, item)
+                visited[item] = true
             end
         end
         return outputtable
@@ -39,4 +54,4 @@ local function countchars(tab)
     return count
 end
 
-return { find = find, getLongestItem = getLongestItem, countchars = countchars, contains = contains }
+return { find = find, getLongestItem = getLongestItem, countchars = countchars, contains = contains, itemIndices = itemIndices }
