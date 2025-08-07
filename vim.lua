@@ -346,6 +346,18 @@ local function registerVisualActionMulti(components, getCb)
     end
 end
 
+local function registerNormalVisualAction(seq, cb)
+    registerAction(seq, cb)
+    registerVisualAction(seq, function()
+        currCursorX = visualModeState.x - currXOffset
+        currCursorY = visualModeState.y - currFileOffset
+        local result = cb() or false
+        visualModeState.x = currCursorX + currXOffset
+        visualModeState.y = currCursorY + currFileOffset
+        return result
+    end)
+end
+
 local function registerMapping(src, dst, opts)
     opts = opts or {}
     local srcArr = keyseq.parseKeySequence(src, keyNormalisation, modifierOrder)
@@ -4348,19 +4360,19 @@ registerAction("#", function()
             search("backward", false, currword)
         end)
 
-registerAction("<C-u>", function()
+registerNormalVisualAction("<C-u>", function()
     if repeatCount0 > 0 then
         scrollOption = repeatCount0
     end
     scrollWindowY(-scrollOption, true)
 end)
-registerAction("<C-d>", function()
+registerNormalVisualAction("<C-d>", function()
     if repeatCount0 > 0 then
         scrollOption = repeatCount0
     end
     scrollWindowY(scrollOption, true)
 end)
-registerAction("<C-b>", function()
+registerNormalVisualAction("<C-b>", function()
     local multiplier = hig - 3
     if multiplier < 1 then
         multiplier = 1
@@ -4368,7 +4380,7 @@ registerAction("<C-b>", function()
     local amount = multiplier * repeatCount1 + 2
     scrollWindowY(-amount, false)
 end)
-registerAction("<C-f>", function()
+registerNormalVisualAction("<C-f>", function()
     local multiplier = hig - 3
     if multiplier < 1 then
         multiplier = 1
@@ -4376,19 +4388,19 @@ registerAction("<C-f>", function()
     local amount = multiplier * repeatCount1 + 2
     scrollWindowY(amount, false)
 end)
-registerAction("<C-y>", function()
+registerNormalVisualAction("<C-y>", function()
     scrollWindowY(-repeatCount1, false)
 end)
-registerAction("<C-e>", function()
+registerNormalVisualAction("<C-e>", function()
     scrollWindowY(repeatCount1, false)
 end)
-registerAction("<scrollwheelup>", function()
+registerNormalVisualAction("<scrollwheelup>", function()
     scrollWindowY(-repeatCount1 * 3, false)
 end)
-registerAction("<scrollwheeldown>", function()
+registerNormalVisualAction("<scrollwheeldown>", function()
     scrollWindowY(repeatCount1 * 3, false)
 end)
-registerAction("<S-scrollwheelup>", function()
+registerNormalVisualAction("<S-scrollwheelup>", function()
     local multiplier = hig - 3
     if multiplier < 1 then
         multiplier = 1
@@ -4396,7 +4408,7 @@ registerAction("<S-scrollwheelup>", function()
     local amount = multiplier * repeatCount1 + 2
     scrollWindowY(-amount, false)
 end)
-registerAction("<S-scrollwheeldown>", function()
+registerNormalVisualAction("<S-scrollwheeldown>", function()
     local multiplier = hig - 3
     if multiplier < 1 then
         multiplier = 1
@@ -4404,7 +4416,7 @@ registerAction("<S-scrollwheeldown>", function()
     local amount = multiplier * repeatCount1 + 2
     scrollWindowY(amount, false)
 end)
-registerAction("<pageup>", function()
+registerNormalVisualAction("<pageup>", function()
     local multiplier = hig - 3
     if multiplier < 1 then
         multiplier = 1
@@ -4412,7 +4424,7 @@ registerAction("<pageup>", function()
     local amount = multiplier * repeatCount1 + 2
     scrollWindowY(-amount, false)
 end)
-registerAction("<pagedown>", function()
+registerNormalVisualAction("<pagedown>", function()
     local multiplier = hig - 3
     if multiplier < 1 then
         multiplier = 1
