@@ -4139,21 +4139,22 @@ local function textObjectCharacterFind(var1, c, opts)
         end
     elseif var1 == "F" or var1 == "T" then
         local idx = str.indicesOfLetter(filelines[opts.y], c)
-        -- TODO Figure out if the lack of repetition is intentional
-        if #idx > 0 then
-            if opts.x > idx[1] + jumpoffset then
-                opts.x = opts.x - (1 + jumpoffset)
-                opts.wantX = nil
-                while not tab.find(idx, opts.x) and opts.x > 1 do
-                    opts.x = opts.x - 1
-                end
-                if var1 == "T" then
-                    opts.x = opts.x + 1
-                end
-                if var1 == "T" then
-                    jumpoffset = 1
-                else
-                    jumpoffset = 0
+        for i = 1, repeatCount1, 1 do
+            if #idx > 0 then
+                if opts.x > idx[1] + jumpoffset then
+                    opts.x = opts.x - (1 + jumpoffset)
+                    opts.wantX = nil
+                    while not tab.find(idx, opts.x) and opts.x > 1 do
+                        opts.x = opts.x - 1
+                    end
+                    if var1 == "T" then
+                        opts.x = opts.x + 1
+                    end
+                    if var1 == "T" then
+                        jumpoffset = 1
+                    else
+                        jumpoffset = 0
+                    end
                 end
             end
         end
