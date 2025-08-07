@@ -3496,6 +3496,10 @@ function cutTextObject(to, settings)
                 newLine = protoLine:sub(1, indentedamount)
             end
             table.insert(filelines, i, newLine)
+            currCursorX = #newLine - currXOffset
+            if onePastEOL then
+                currCursorX = currCursorX + 1
+            end
         end
     else
         if to.exclusive then
