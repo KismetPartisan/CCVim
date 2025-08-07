@@ -1356,11 +1356,22 @@ local function scrollWindowY(amount, currSOL)
             end
         end
     end
+    local line = filelines[currCursorY + currFileOffset]
     if currSOL then
-        currCursorX = 1
         currXOffset = 0
+        currCursorX = 1
+        if line then
+            currCursorX = line:find("[^ \x09]") or #line
+        end
+        if currCursorX < 1 then
+            currCursorX = 1
+        end
+        if currCursorX + lineoffset > wid then
+            local delta = wid - currCursorX - lineoffset
+            currCursorX = currCursorX + delta
+            currXOffset = currXOffset - delta
+        end
     else
-        local line = filelines[currCursorY + currFileOffset]
         if line and #line < currCursorX + currXOffset then
             currCursorX = #line - currXOffset
             if currCursorX < 1 then
