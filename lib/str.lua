@@ -18,9 +18,13 @@ local punctuation = {
     "\""
 }
 
+local punctuationSet = tab.itemIndices(punctuation)
+
 local escapable = {
     "\""
 }
+
+local escapableSet = tab.itemIndices(escapable)
 
 local function split(s, delimiter)
     local result = {};
@@ -74,11 +78,11 @@ local function wordBeginnings(inp, nopunc)
     for i=1,#inp,1 do
         table.insert(letters, #letters + 1, string.sub(inp, i, i))
     end
-    if letters[1] ~= " " and letters[1] ~= nil and not (tab.find(punctuation, letters[1] and nopunc)) then
+    if letters[1] ~= " " and letters[1] ~= nil and not (punctuationSet[letters[1]] and nopunc) then
         table.insert(output, #output + 1, 1)
     end
     for i=1,#letters,1 do
-        if (letters[i - 1] == " " and letters[i] ~= " " and not (tab.find(punctuation, letters[i]) and nopunc)) or (tab.find(punctuation, letters[i - 1]) and letters[i] ~= " " and nopunc) then
+        if (letters[i - 1] == " " and letters[i] ~= " " and not (punctuationSet[letters[i]] and nopunc)) or (punctuationSet[letters[i - 1]] and letters[i] ~= " " and nopunc) then
             table.insert(output, #output + 1, i)
         end
     end
@@ -96,7 +100,7 @@ local function wordEnds(inp, nopunc)
         table.insert(letters, #letters + 1, string.sub(inp, i, i))
     end
     for i=1,#letters,1 do
-        if ((letters[i + 1] == " " or letters[i + 1] == nil) and letters[i] ~= " " and not (tab.find(punctuation, letters[i]) and nopunc)) or (tab.find(punctuation, letters[i + 1]) and letters[i] ~= " " and nopunc) then
+        if ((letters[i + 1] == " " or letters[i + 1] == nil) and letters[i] ~= " " and not (punctuationSet[letters[i]] and nopunc)) or (punctuationSet[letters[i + 1]] and letters[i] ~= " " and nopunc) then
             table.insert(output, #output + 1, i)
         end
     end
@@ -110,7 +114,7 @@ local function indicesOfLetter(inp, chr)
     local output = {}
     for i=1,#inp,1 do
         if string.sub(inp, i, i) == chr then
-            if tab.find(escapable, chr) then
+            if escapableSet[chr] then
                 if string.sub(inp, i-1, i-1) ~= "\\" then
                     table.insert(output, #output + 1, i)
                 end
@@ -123,11 +127,15 @@ local function indicesOfLetter(inp, chr)
 end
 
 local function find(inp, mtch, ignore)
+    local ignoreSet
+    if ignore then
+        local ignoreSet = tab.itemIndices(ignore)
+    end
     if inp then
         for i=1,#inp,1 do
             if string.sub(inp, i, i + #mtch - 1) == mtch then
                 if ignore then
-                    if not tab.find(ignore, i) then
+                    if not ignoreSet[i] then
                         return i
                     end
                 else
