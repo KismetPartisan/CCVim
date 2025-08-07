@@ -876,6 +876,22 @@ local function textObjectEOL(opts)
     return opts
 end
 
+local function textObjectSOL(opts)
+    opts = opts and itertools.collect(pairs(opts)) or {wantX = oldx}
+    opts.x = opts.x or currCursorX + currXOffset
+    opts.y = opts.y or currCursorY + currFileOffset
+    opts.initialX = opts.initialX or opts.x
+    opts.initialY = opts.initialY or opts.y
+
+    opts.wantX = nil
+    local line = filelines[opts.y]
+    opts.x = line:find("[^ \x09]") or #line
+    if opts.x < 1 then
+        opts.x = 1
+    end
+    return opts
+end
+
 local function clearScreenLine(line)
     setcolors(colors.black, colors.white)
     setpos(1, line)
@@ -3365,11 +3381,9 @@ registerAction("i", function()
             insertMode()
         end)
 registerAction("I", function()
-            currXOffset = 0
-            currCursorX = 1
-            drawFile(true)
-            insertMode()
-        end)
+    performMotion(nil, textObjectSOL)
+    insertMode()
+end)
 registerMotionMulti({{"h", "<left>"}}, function()
     return {exclusive = true}, (function(opts)
         opts.x = opts.x - repeatCount1
@@ -4132,13 +4146,7 @@ registerMotionMulti({{"b", "B"}}, function(lst)
     end)
 end)
 registerMotion("^", {exclusive = true}, function(opts)
-    opts.wantX = nil
-    local line = filelines[opts.y]
-    opts.x = line:find("[^ \x09]") or #line
-    if opts.x < 1 then
-        opts.x = 1
-    end
-    return opts
+    return textObjectSOL(opts)
 end)
 local function textObjectCharacterFind(var1, c, opts)
     if var1 == "f" or var1 == "t" then
