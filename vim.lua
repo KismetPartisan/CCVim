@@ -1191,7 +1191,9 @@ local function drawFile(forcedredraw)
         for i=currFileOffset,(hig-1)+currFileOffset,1 do
             setpos(1, i - currFileOffset)
             if i < 1000 then
-                write(string.rep(" ", 3 - #tostring(i)))
+                if i <= #filelines then
+                    write(string.rep(" ", 3 - #tostring(i)))
+                end
             end
             if i < 10000 then
                 if i <= #filelines then
