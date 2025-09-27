@@ -3634,7 +3634,7 @@ registerAction("y", function()
 end)
 registerVisualAction("y", function()
     resetLastSearch()
-    yankTextObject(textObjectLine())
+    yankTextObject(visualModeState)
     return true
 end)
 registerAction("Y", function()
