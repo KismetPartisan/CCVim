@@ -1058,8 +1058,20 @@ local function drawFileLine(i, synt)
                         end
                         justset = false
                     end
-                    local commentstart = 0
-                    commentstart = str.find(filelines[i], synt[4], quotepoints)
+                    local commentstart = false
+                    local searchindex = 0
+                    while not commentstart do
+                        commentstart = string.find(filelines[i], synt[4], searchindex, true)
+                        if commentstart == nil then break end
+                        searchindex = commentstart + 3
+                        for x=1, #quotationmarks, 2 do
+                            if not quotationmarks[x+1] then break end
+                            if commentstart > quotationmarks[x] and commentstart < quotationmarks[x+1] then
+                                commentstart = false
+                                break
+                            end
+                        end
+                    end
                     if commentstart and commentstart ~= false then
                         setpos(1 - currXOffset + lineoffset + commentstart - 1, i - currFileOffset)
                         local commentText = string.sub(filelines[i], commentstart, #filelines[i])
