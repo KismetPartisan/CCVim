@@ -3928,6 +3928,10 @@ function afterDelete(settings)
                     end
                 end
             end
+            if currCursorX + currXOffset < 1 then
+                currCursorX = 1 
+                currXOffset = 0
+            end
             recalcMLCs()
             drawFile(true)
         end
