@@ -2816,7 +2816,7 @@ registerAction(":", function()
                 local oldCursor = {term.getCursorPos()}
                 term.setCursorPos(1, hig)
                 setcolors(colors.black, colors.white)
-                shell.run(cmd:sub(3, 4))
+                shell.run(cmd:sub(3))
                 print("Exited, press enter to continue...")
                 local _, k = os.pullEvent("key")
                 while k ~= keys.enter do
